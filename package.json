@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/ws": "^8.18.1",
     "better-sqlite3": "^12.11.1",
     "croner": "^10.0.1",
