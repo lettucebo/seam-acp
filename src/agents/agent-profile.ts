@@ -3,6 +3,20 @@ import type { Readable as NodeReadable, Writable as NodeWritable } from "node:st
 import type { ISessionManager } from "./session-manager.js";
 
 /**
+ * Per-session context handed to `spawn()` so the agent subprocess can be wired
+ * to session-scoped services. Immutable; built by the session-router before the
+ * runtime starts.
+ */
+export interface SpawnContext {
+  /**
+   * When set, the profile should inject an `ask_user` MCP server pointed at
+   * this loopback ChoiceBroker endpoint, authenticated with this per-runtime
+   * bearer token. Lets the model surface interactive choices to the operator.
+   */
+  askUser?: { url: string; token: string };
+}
+
+/**
  * Describes how to spawn and configure an ACP-compatible coding agent.
  * Adding a new agent (Claude Code, Gemini, etc.) is a matter of writing one
  * of these and adding it to the registry.
@@ -59,7 +73,8 @@ export interface AgentProfile {
    *  Profiles that apply effort via ACP config options or `_meta` ignore this. */
   spawn(
     modelOverride?: string,
-    effortOverride?: string
+    effortOverride?: string,
+    ctx?: SpawnContext
   ): ChildProcessByStdio<NodeWritable, NodeReadable, NodeReadable>;
 
   /**

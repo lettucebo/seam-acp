@@ -1,10 +1,17 @@
 import { spawn } from "node:child_process";
 import fs, { promises as fsp } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import type { AgentIdentity, AgentProfile } from "../agent-profile.js";
 import type { SessionSummary, SessionSummaryLine } from "../session-manager.js";
+
+/** Absolute path to the compiled ask_user MCP server (dist/ask-user-mcp-server.js),
+ *  injected per-session when a ChoiceBroker wires the runtime. */
+const ASK_USER_SERVER = fileURLToPath(
+  new URL("../../ask-user-mcp-server.js", import.meta.url)
+);
 
 /**
  * GitHub Copilot CLI as an ACP server (`copilot --acp`).
@@ -42,7 +49,6 @@ export function makeCopilotProfile(opts: {
   threadAbbr?: string;
 }): AgentProfile {
   const cli = opts.cliPath?.trim() || "copilot";
-  const additionalMcpJson = buildCopilotMcpConfigJson(opts.mcpServers ?? []);
   const configDir = opts.configDir?.trim() || undefined;
 
   let identityCache: AgentIdentity | null | undefined;
@@ -58,7 +64,23 @@ export function makeCopilotProfile(opts: {
     // `copilot --acp`: configOptions[id=reasoning_effort], low|medium|high).
     // Applied post-session-create via setSessionConfigOption (AgentRuntime).
     effort: { mechanism: "configOption", configId: "reasoning_effort", levels: ["low", "medium", "high"] },
-    spawn() {
+    spawn(_modelOverride, _effortOverride, ctx) {
+      // Build the injected MCP config per spawn so we can add a per-session
+      // ask_user server (scoped by a session bearer token) on top of any
+      // globally-configured MCP servers.
+      const servers: McpServer[] = [...(opts.mcpServers ?? [])];
+      if (ctx?.askUser) {
+        servers.push({
+          name: "seam_ask_user",
+          command: process.execPath,
+          args: [ASK_USER_SERVER],
+          env: [
+            { name: "SEAM_CHOICE_URL", value: ctx.askUser.url },
+            { name: "SEAM_CHOICE_TOKEN", value: ctx.askUser.token },
+          ],
+        });
+      }
+      const additionalMcpJson = buildCopilotMcpConfigJson(servers);
       const args = ["--acp"];
       if (additionalMcpJson) {
         args.push("--additional-mcp-config", additionalMcpJson);

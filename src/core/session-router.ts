@@ -5,6 +5,7 @@ import type { SessionStore } from "./session-store.js";
 import type { SessionRecord, PermissionPolicyMode } from "./types.js";
 import { defaultSessionConfig, resolvePermissionMode } from "./types.js";
 import { makeSessionId } from "./session-store.js";
+import type { ChoiceBroker } from "./choice-broker.js";
 import type {
   McpServer,
   RequestPermissionRequest,
@@ -34,6 +35,7 @@ export class SessionRouter {
   private readonly defaultPermissionMode: PermissionPolicyMode;
   private readonly mcpServers: McpServer[];
   private askUser?: AskUserFn;
+  private choiceBroker?: ChoiceBroker;
 
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly creationLocks = new Map<string, Promise<AgentRuntime>>();
@@ -65,6 +67,15 @@ export class SessionRouter {
    */
   setAskUser(fn: AskUserFn): void {
     this.askUser = fn;
+  }
+
+  /**
+   * Wire the ChoiceBroker used to surface interactive `ask_user` prompts. When
+   * set, each spawned runtime gets a per-session ask_user MCP server injected
+   * with a scoped callback token.
+   */
+  setChoiceBroker(broker: ChoiceBroker): void {
+    this.choiceBroker = broker;
   }
 
   /** List the registered agent profiles. */
@@ -253,6 +264,7 @@ export class SessionRouter {
       );
     }
     const cfg = this.store.readConfig(record);
+    let choiceToken: string | undefined;
     const runtime = new AgentRuntime({
       profile,
       logger: this.logger.child({ session: record.id }),
@@ -260,6 +272,7 @@ export class SessionRouter {
       onDead: () => {
         this.logger.info({ sessionId: record.id }, "agent process died; evicting runtime for auto-resume");
         this.runtimes.delete(record.id);
+        if (choiceToken) this.choiceBroker?.revoke(choiceToken);
       },
       permissionPolicy: async (req) => {
         // Always re-read: the captured `cfg` would be stale if the user later
@@ -289,6 +302,16 @@ export class SessionRouter {
         return { outcome: { outcome: "cancelled" } };
       },
     });
+
+    // Wire per-session ask_user MCP injection when a ChoiceBroker is present.
+    // The bearer token scopes broker callbacks to this session; it is revoked
+    // in onDead above.
+    if (this.choiceBroker) {
+      choiceToken = this.choiceBroker.registerRuntime(record.id);
+      runtime.spawnContext = {
+        askUser: { url: this.choiceBroker.callbackUrl, token: choiceToken },
+      };
+    }
 
     // For non-Anthropic backends (Ollama Cloud, Z.ai), setModel() is rejected
     // by claude-agent-acp. Pass the model at spawn time via env vars instead.

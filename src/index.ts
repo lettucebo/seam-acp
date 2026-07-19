@@ -4,6 +4,7 @@ import { logger } from "./lib/logger.js";
 import { startHealthServer } from "./lib/health.js";
 import { SessionStore } from "./core/session-store.js";
 import { SessionRouter } from "./core/session-router.js";
+import { ChoiceBroker } from "./core/choice-broker.js";
 import { makeCopilotProfile } from "./agents/profiles/copilot.js";
 import { makeClaudeProfile } from "./agents/profiles/claude.js";
 import { makeAgyProfile } from "./agents/profiles/agy.js";
@@ -360,6 +361,46 @@ async function main(): Promise<void> {
     return adapter.requestApproval(channel, req);
   });
 
+  // Wire the interactive ask_user broker. The per-session ask_user MCP server
+  // (injected into each Copilot spawn) POSTs the model's question here; we
+  // present it as a Discord picker in that session's thread and return the
+  // chosen answer. Loopback + per-session bearer token; see ChoiceBroker.
+  const choiceBroker = new ChoiceBroker({
+    logger,
+    timeoutMs: 6 * 60 * 1000,
+    presenter: async (key, prompt) => {
+      const record = store.get(key);
+      if (!record) return { status: "error", error: "session not found" };
+      if (prompt.options.length === 0) {
+        // Nothing to render as buttons — let the model ask in prose instead.
+        return { status: "error", error: "no options provided" };
+      }
+      const channel = {
+        platform: record.platform,
+        id: record.channelRef,
+        ...(record.parentRef ? { parentId: record.parentRef } : {}),
+      };
+      const picked = await adapter.sendChoicePicker(channel, {
+        prompt: prompt.question,
+        choices: prompt.options.map((o) => ({
+          value: o.optionId,
+          label: o.label,
+          ...(o.description ? { description: o.description } : {}),
+        })),
+        authorizedUserIds: config.DISCORD_ALLOWED_USER_IDS,
+      });
+      if (!picked) return { status: "timed_out" };
+      const opt = prompt.options.find((o) => o.optionId === picked.value);
+      return {
+        status: "selected",
+        optionId: picked.value,
+        ...(opt ? { label: opt.label } : {}),
+      };
+    },
+  });
+  await choiceBroker.start();
+  router.setChoiceBroker(choiceBroker);
+
   await adapter.start();
 
   // Scheduled prompts: arm timers from the DB once Discord is connected (so a
@@ -397,6 +438,11 @@ async function main(): Promise<void> {
       await adapter.stop();
     } catch (err) {
       logger.warn({ err }, "adapter stop failed");
+    }
+    try {
+      await choiceBroker.stop();
+    } catch (err) {
+      logger.warn({ err }, "choice-broker stop failed");
     }
     try {
       await router.disposeAll();

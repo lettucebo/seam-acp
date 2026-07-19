@@ -12,7 +12,7 @@ import {
   type SessionNotification,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
-import type { AgentProfile } from "./agent-profile.js";
+import type { AgentProfile, SpawnContext } from "./agent-profile.js";
 import type { Logger } from "../lib/logger.js";
 import type { MessageAttachment } from "../platforms/chat-adapter.js";
 import {
@@ -177,6 +177,9 @@ export class AgentRuntime {
    *  effort via CLI flags (e.g. Grok `--reasoning-effort`). Set by the
    *  session-router before calling `start()`. */
   effortOverride?: string;
+  /** Per-session spawn context (e.g. ask_user MCP wiring). Set by the
+   *  session-router before `start()`; forwarded to `profile.spawn()`. */
+  spawnContext?: SpawnContext;
 
   private eventHandler?: AgentEventHandler;
 
@@ -227,7 +230,7 @@ export class AgentRuntime {
   /** Start the agent process and complete ACP `initialize`. */
   async start(): Promise<void> {
     if (this.connection) return;
-    const child = this.profile.spawn(this.modelOverride, this.effortOverride);
+    const child = this.profile.spawn(this.modelOverride, this.effortOverride, this.spawnContext);
     this.child = child;
 
     // Capture spawn errors (ENOENT, EACCES, etc.) so they surface as a
