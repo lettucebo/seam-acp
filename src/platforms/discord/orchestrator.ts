@@ -126,6 +126,8 @@ export class Orchestrator {
    *  after background activity goes quiet. Display-only; cleared when a new turn
    *  takes over the session's status card. */
   private readonly bgSettleTimers = new Map<string, NodeJS.Timeout>();
+  /** Last rendered plan text per session, to dedupe repeated plan updates. */
+  private readonly lastPlanRender = new Map<string, string>();
   /** Set by index.ts after construction; used by /seam schedule handlers to
    *  arm/disarm timers and by the fire runner to drop deleted-thread schedules. */
   private scheduledManager?: ScheduledPromptManager;
@@ -655,6 +657,10 @@ export class Orchestrator {
           );
         }
         switch (event.kind) {
+          case "plan": {
+            await this.renderPlanUpdate(channel, record.id, event.entries);
+            return;
+          }
           case "agent-text": {
             refreshTyping();
             // Detect Copilot CLI retry: either the agent emits a "Retrying"
@@ -1073,6 +1079,20 @@ export class Orchestrator {
         },
         "turn timing"
       );
+
+      // Plan mode: after the planning turn ends, offer to proceed. Copilot's TUI
+      // plan-approval / mode-switch prompt is not emitted over ACP, so add it.
+      {
+        const modeId = activeRuntime.getSessionInfo()?.currentModeId;
+        const inPlan = modeId
+          ? modeId.endsWith("#plan")
+          : (this.store.readConfig(record).mode ?? "").toLowerCase().includes("plan");
+        if (result !== "timeout" && inPlan) {
+          void this.offerPlanProceed(channel, record).catch((err) =>
+            this.logger.warn({ err, session: record.id }, "plan-proceed picker failed")
+          );
+        }
+      }
 
       if (
         result !== "timeout" &&
@@ -2905,6 +2925,71 @@ export class Orchestrator {
     } else {
       await this.adapter.sendMessage(channel, message);
     }
+  }
+
+  private async renderPlanUpdate(
+    channel: ChannelRef,
+    sessionId: string,
+    entries: Array<{ content: string; priority?: string; status?: string }>
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const icon = (s?: string): string =>
+      s === "completed" ? "✅" : s === "in_progress" ? "🔄" : "⬜";
+    const body = entries
+      .map((e, i) => `${icon(e.status)} ${i + 1}. ${e.content}`)
+      .join("\n");
+    const text = `📋 **計畫**\n${body}`;
+    if (this.lastPlanRender.get(sessionId) === text) return; // dedupe repeats
+    this.lastPlanRender.set(sessionId, text);
+    try {
+      await this.adapter.sendMessage(channel, text.slice(0, 1900));
+    } catch (err) {
+      this.logger.warn({ err, session: sessionId }, "failed to render plan update");
+    }
+  }
+
+  /**
+   * After a Plan-mode turn ends, offer the operator a picker to proceed:
+   * switch to Autopilot / Agent (and kick off execution) or keep planning.
+   * Copilot's native "approve plan & switch mode" prompt is not emitted over
+   * ACP, so this recreates it on Discord.
+   */
+  private async offerPlanProceed(
+    channel: ChannelRef,
+    record: SessionRecord
+  ): Promise<void> {
+    const sendPicker = this.adapter.sendChoicePicker?.bind(this.adapter);
+    if (!sendPicker) return;
+    const picked = await sendPicker(channel, {
+      prompt: "📋 計畫已完成。接下來要怎麼進行？",
+      choices: [
+        { value: "autopilot", label: "🚀 切 Autopilot 執行" },
+        { value: "agent", label: "🤖 用 Agent 逐步執行" },
+        { value: "keep", label: "✋ 保持 Plan（我要補充）" },
+      ],
+      authorizedUserIds: this.config.DISCORD_ALLOWED_USER_IDS,
+    });
+    if (!picked || picked.value === "keep") return;
+    const targetMode = picked.value; // "autopilot" | "agent"
+    const cfg = this.store.readConfig(record);
+    cfg.mode = targetMode;
+    this.persistConfig(record, cfg);
+    try {
+      const rt = await this.router.getOrStartRuntime(record);
+      await rt.applyMode(targetMode);
+    } catch (err) {
+      this.logger.warn({ err, session: record.id }, "plan-proceed: applyMode failed");
+    }
+    const proceedText =
+      targetMode === "autopilot"
+        ? "請依剛才規劃好的計畫開始執行，直到完成。"
+        : "請開始逐步執行剛才規劃好的計畫。";
+    void this.handleIncomingMessage({
+      channel,
+      authorId: picked.userId,
+      authorIsBot: false,
+      text: proceedText,
+    });
   }
 
   private async cmdMode(i: ChatInputCommandInteraction): Promise<void> {

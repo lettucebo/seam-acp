@@ -27,6 +27,10 @@ export type AgentEvent =
   | { kind: "agent-text"; text: string; messageId?: string }
   | { kind: "agent-thought"; text: string }
   | {
+      kind: "plan";
+      entries: Array<{ content: string; priority?: string; status?: string }>;
+    }
+  | {
       kind: "tool-start";
       toolCallId: string;
       title?: string;
@@ -734,6 +738,30 @@ export class AgentRuntime {
   }
 
   private async handleSessionUpdateInner(update: SessionUpdate): Promise<void> {
+    // ACP `plan` updates (Copilot plan mode) carry structured plan entries.
+    // Handle before the typed switch so we don't depend on the SDK's union
+    // including the "plan" variant.
+    if ((update as { sessionUpdate?: string }).sessionUpdate === "plan") {
+      const entries = (update as unknown as { entries?: unknown }).entries;
+      if (Array.isArray(entries)) {
+        const mapped = entries
+          .map((e) => {
+            const o = (e ?? {}) as {
+              content?: unknown;
+              priority?: unknown;
+              status?: unknown;
+            };
+            return {
+              content: typeof o.content === "string" ? o.content : "",
+              ...(typeof o.priority === "string" ? { priority: o.priority } : {}),
+              ...(typeof o.status === "string" ? { status: o.status } : {}),
+            };
+          })
+          .filter((e) => e.content.length > 0);
+        if (mapped.length > 0) await this.emit({ kind: "plan", entries: mapped });
+      }
+      return;
+    }
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
         await this.handleContentBlock(update.content, "message", {
