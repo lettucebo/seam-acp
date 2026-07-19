@@ -1088,6 +1088,9 @@ export class Orchestrator {
           ? modeId.endsWith("#plan")
           : (this.store.readConfig(record).mode ?? "").toLowerCase().includes("plan");
         if (result !== "timeout" && inPlan) {
+          await this.postPlanDetail(channel, record).catch((err) =>
+            this.logger.warn({ err, session: record.id }, "post plan.md detail failed")
+          );
           void this.offerPlanProceed(channel, record).catch((err) =>
             this.logger.warn({ err, session: record.id }, "plan-proceed picker failed")
           );
@@ -2945,6 +2948,63 @@ export class Orchestrator {
       await this.adapter.sendMessage(channel, text.slice(0, 1900));
     } catch (err) {
       this.logger.warn({ err, session: sessionId }, "failed to render plan update");
+    }
+  }
+
+  /** Per-session copy of the last plan.md we posted, to avoid reposting it. */
+  private readonly lastPlanDetail = new Map<string, string>();
+
+  /**
+   * After a plan-mode turn, post the FULL plan the writing-plans skill wrote to
+   * Copilot's session-state `plan.md`. Rendered collapsed-by-default: as a
+   * Discord spoiler when it fits (blurred until clicked), else attached as a
+   * file (also hidden until opened). Copilot only summarizes the plan in chat,
+   * so this surfaces the complete detail the operator asked for.
+   */
+  private async postPlanDetail(channel: ChannelRef, record: SessionRecord): Promise<void> {
+    if (!record.acpSessionId) return;
+    const profile = this.router.getProfile(record.agentId);
+    const home =
+      profile?.configDir ||
+      process.env.COPILOT_HOME ||
+      path.join(os.homedir(), ".copilot");
+    const planPath = path.join(home, "session-state", record.acpSessionId, "plan.md");
+    let content: string;
+    try {
+      content = (await fsp.readFile(planPath, "utf8")).trim();
+    } catch {
+      return; // no plan.md for this session — nothing to surface
+    }
+    if (!content) return;
+    if (this.lastPlanDetail.get(record.id) === content) return; // unchanged since last post
+    this.lastPlanDetail.set(record.id, content);
+
+    const header = "📋 **完整計畫**（plan.md）— 點擊展開";
+    // Discord spoilers hide content until clicked = collapsed by default.
+    // Neutralize any `||` in the content so it can't close the spoiler early.
+    const safe = content.replace(/\|\|/g, "\u200b|\u200b|");
+    const spoiler = `${header}\n||\n${safe}\n||`;
+    if (spoiler.length <= 1900) {
+      await this.adapter.sendMessage(channel, spoiler);
+      return;
+    }
+    // Too long for one message: attach the full plan as a file (still collapsed —
+    // shown as a card the operator clicks to open).
+    if (this.adapter.sendFile) {
+      await this.adapter
+        .sendMessage(channel, `${header}（內容較長，附為檔案）`)
+        .catch(() => {});
+      await this.adapter.sendFile(channel, {
+        data: Buffer.from(content, "utf8"),
+        filename: "plan.md",
+        mimeType: "text/markdown",
+      });
+      return;
+    }
+    // Last resort (no sendFile): chunk into multiple spoiler messages.
+    await this.adapter.sendMessage(channel, header);
+    for (let i = 0; i < safe.length; i += 1800) {
+      await this.adapter.sendMessage(channel, `||\n${safe.slice(i, i + 1800)}\n||`);
     }
   }
 
