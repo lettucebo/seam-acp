@@ -1,4 +1,6 @@
 import path from "node:path";
+import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import { loadConfig, REMOTE_MAC_MODELS, CODEX_STATIC_MODELS, GROK_STATIC_MODELS, ZAI_STATIC_MODELS, OLLAMA_CLOUD_STATIC_MODELS } from "./config.js";
 import { logger } from "./lib/logger.js";
 import { startHealthServer } from "./lib/health.js";
@@ -18,6 +20,24 @@ import { Orchestrator } from "./platforms/discord/orchestrator.js";
 import { buildGlobalMcpServers } from "./mcp.js";
 import { startTunnelGistPublisher } from "./lib/tunnel-gist.js";
 import { ScheduledPromptManager } from "./core/scheduled-prompts/manager.js";
+
+/**
+ * Whether a CLI is runnable — an existing path, or a bare command resolvable on
+ * PATH. Used to load an agent profile only when its CLI is actually installed,
+ * so a Copilot-only host doesn't crash warming up another agent (e.g. agy's
+ * catalog probe throws an unhandled spawn ENOENT when `agy` is absent).
+ */
+function commandExists(bin: string | undefined): boolean {
+  const b = bin?.trim();
+  if (!b) return false;
+  if (b.includes("/") || b.includes("\\")) return fs.existsSync(b);
+  const finder = process.platform === "win32" ? "where" : "which";
+  try {
+    return spawnSync(finder, [b], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -61,16 +81,18 @@ async function main(): Promise<void> {
     })
   );
 
-  const claude = makeClaudeProfile({
-    ...(config.CLAUDE_CLI_PATH ? { cliPath: config.CLAUDE_CLI_PATH } : {}),
-    defaultModel: config.CLAUDE_DEFAULT_MODEL,
-    staticModels: config.CLAUDE_MODELS,
-    threadAbbr: "👾",
-    maxThinkingTokens: config.CLAUDE_MAX_THINKING_TOKENS,
-    thinkingDisplay: config.CLAUDE_THINKING_DISPLAY,
-    compactionTokenThreshold: config.CLAUDE_COMPACTION_TOKEN_THRESHOLD,
-    mcpServers,
-  });
+  const claude = commandExists(config.CLAUDE_CLI_PATH || "claude-agent-acp")
+    ? makeClaudeProfile({
+        ...(config.CLAUDE_CLI_PATH ? { cliPath: config.CLAUDE_CLI_PATH } : {}),
+        defaultModel: config.CLAUDE_DEFAULT_MODEL,
+        staticModels: config.CLAUDE_MODELS,
+        threadAbbr: "👾",
+        maxThinkingTokens: config.CLAUDE_MAX_THINKING_TOKENS,
+        thinkingDisplay: config.CLAUDE_THINKING_DISPLAY,
+        compactionTokenThreshold: config.CLAUDE_COMPACTION_TOKEN_THRESHOLD,
+        mcpServers,
+      })
+    : undefined;
 
   const extraClaudes = config.CLAUDE_PROFILES.map((p) =>
     makeClaudeProfile({
@@ -110,14 +132,16 @@ async function main(): Promise<void> {
       })
     : undefined;
 
-  const agy = makeAgyProfile({
-    ...(config.AGY_CLI_PATH ? { cliPath: config.AGY_CLI_PATH } : {}),
-    defaultModel: config.AGY_DEFAULT_MODEL,
-    staticModels: config.AGY_MODELS,
-    threadAbbr: "🌌",
-    dataDir: config.DATA_DIR,
-    printTimeoutSeconds: config.TURN_TIMEOUT_SECONDS,
-  });
+  const agy = commandExists(config.AGY_CLI_PATH || "agy")
+    ? makeAgyProfile({
+        ...(config.AGY_CLI_PATH ? { cliPath: config.AGY_CLI_PATH } : {}),
+        defaultModel: config.AGY_DEFAULT_MODEL,
+        staticModels: config.AGY_MODELS,
+        threadAbbr: "🌌",
+        dataDir: config.DATA_DIR,
+        printTimeoutSeconds: config.TURN_TIMEOUT_SECONDS,
+      })
+    : undefined;
 
   // Optional OpenAI Codex agent via @agentclientprotocol/codex-acp.
   const codex = config.CODEX_ENABLED
@@ -312,7 +336,7 @@ async function main(): Promise<void> {
   const router = new SessionRouter({
     logger,
     store,
-    profiles: [copilot, ...extraCopilots, claude, ...extraClaudes, ...(claudeVertex ? [claudeVertex] : []), agy, ...(codex ? [codex] : []), ...(grok ? [grok] : []), ...(zai ? [zai] : []), ...(ollamaCloud ? [ollamaCloud] : []), ...(ollama ? [ollama] : []), ...remoteCopilots],
+    profiles: [copilot, ...extraCopilots, ...(claude ? [claude] : []), ...extraClaudes, ...(claudeVertex ? [claudeVertex] : []), ...(agy ? [agy] : []), ...(codex ? [codex] : []), ...(grok ? [grok] : []), ...(zai ? [zai] : []), ...(ollamaCloud ? [ollamaCloud] : []), ...(ollama ? [ollama] : []), ...remoteCopilots],
     defaultAgentId: config.DEFAULT_AGENT,
     defaultModel: config.DEFAULT_MODEL,
     // Legacy DEFAULT_AUTO_APPROVE=true overrides the policy default to "always".
