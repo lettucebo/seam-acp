@@ -69,7 +69,10 @@ export function makeCopilotProfile(opts: {
       // ask_user server (scoped by a session bearer token) on top of any
       // globally-configured MCP servers.
       const servers: McpServer[] = [...(opts.mcpServers ?? [])];
-      if (ctx?.askUser) {
+      // Only inject when the compiled server exists (production/dist). Under
+      // `npm run dev` (tsx) the .js isn't present; degrade to prose rather than
+      // pointing Copilot at a missing MCP server.
+      if (ctx?.askUser && fs.existsSync(ASK_USER_SERVER)) {
         servers.push({
           name: "seam_ask_user",
           command: process.execPath,

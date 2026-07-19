@@ -316,7 +316,15 @@ export class SessionRouter {
     // For non-Anthropic backends (Ollama Cloud, Z.ai), setModel() is rejected
     // by claude-agent-acp. Pass the model at spawn time via env vars instead.
     runtime.modelOverride = cfg.model ?? this.defaultModel;
-    await runtime.start();
+    try {
+      await runtime.start();
+    } catch (err) {
+      // A failed spawn (e.g. ENOENT when the CLI isn't on PATH) emits "error"
+      // but no "exit", so onDead never fires — revoke the choice token here so
+      // it doesn't linger in the broker across retries.
+      if (choiceToken) this.choiceBroker?.revoke(choiceToken);
+      throw err;
+    }
 
     const cwd = record.repoPath ?? process.cwd();
 
