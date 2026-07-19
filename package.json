@@ -30,7 +30,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",
     "@types/ws": "^8.18.1",
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.11.1",
     "croner": "^10.0.1",
     "cronstrue": "^3.14.0",
     "discord.js": "^14.16.3",

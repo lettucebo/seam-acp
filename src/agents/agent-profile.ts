@@ -53,8 +53,14 @@ export interface AgentProfile {
   /** Spawn the agent as an ACP server over stdio.
    *  @param modelOverride — when set, the spawned process should use this model
    *  instead of the profile default. Used for non-Anthropic backends where
-   *  `setModel()` (ACP config option) is rejected by the adapter. */
-  spawn(modelOverride?: string): ChildProcessByStdio<NodeWritable, NodeReadable, NodeReadable>;
+   *  `setModel()` (ACP config option) is rejected by the adapter.
+   *  @param effortOverride — when set, agents that take reasoning effort via a
+   *  CLI flag (e.g. Grok `--reasoning-effort`) should apply it at spawn time.
+   *  Profiles that apply effort via ACP config options or `_meta` ignore this. */
+  spawn(
+    modelOverride?: string,
+    effortOverride?: string
+  ): ChildProcessByStdio<NodeWritable, NodeReadable, NodeReadable>;
 
   /**
    * How this agent exposes reasoning effort, if at all. Drives both the
