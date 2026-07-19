@@ -2917,15 +2917,22 @@ export class Orchestrator {
     const cfg = this.store.readConfig(record);
     cfg.mode = id;
     this.persistConfig(record, cfg);
+    let message: string;
     if (this.router.hasRuntime(record.id)) {
       try {
         const rt = await this.router.getOrStartRuntime(record);
-        await rt.setMode(id);
+        const applied = await rt.applyMode(id);
+        message = applied
+          ? `Mode set to \`${applied}\`.`
+          : `⚠️ Couldn't switch to \`${id}\` — the agent didn't advertise that mode. Stored it; it'll be retried next turn.`;
       } catch (err) {
         this.logger.warn({ err }, "live mode set failed");
+        message = `⚠️ Failed to switch mode live (stored \`${id}\`; will retry next turn).`;
       }
+    } else {
+      message = `Mode \`${id}\` will apply on the next turn.`;
     }
-    await i.reply({ content: `Mode set to \`${id}\`.`, flags: MessageFlags.Ephemeral });
+    await i.reply({ content: message, flags: MessageFlags.Ephemeral });
   }
 
   private async cmdEffort(i: ChatInputCommandInteraction): Promise<void> {

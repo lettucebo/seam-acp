@@ -313,6 +313,7 @@ export class SessionRouter {
             cwd,
             model: cfg.model ?? this.defaultModel,
             ...(cfg.reasoningEffort ? { effort: cfg.reasoningEffort } : {}),
+            ...(cfg.mode ? { mode: cfg.mode } : {}),
           });
           this.logger.debug(
             { sessionId: record.id, acpSessionId: record.acpSessionId, attempt },
@@ -338,6 +339,7 @@ export class SessionRouter {
       cwd,
       model: cfg.model ?? this.defaultModel,
       ...(cfg.reasoningEffort ? { effort: cfg.reasoningEffort } : {}),
+      ...(cfg.mode ? { mode: cfg.mode } : {}),
     });
     // Persist the new ACP session id so we can resume on restart. Also sync the
     // caller's in-memory record: getOrStartRuntime receives the same record the

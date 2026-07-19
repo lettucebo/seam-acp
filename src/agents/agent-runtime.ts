@@ -70,6 +70,11 @@ export interface NewSessionOptions {
   /** Optional reasoning effort (low|medium|high|xhigh|max). Passed via
    *  `newSessionMeta` into `_meta.claudeCode.options.effort`. */
   effort?: string;
+  /** Optional operational mode to (re)apply after the session exists, e.g.
+   *  "autopilot" / "plan" / "agent" or a full ACP mode id. Resolved against the
+   *  agent's advertised `availableModes`. ACP modes reset on every session/new
+   *  and subprocess restart, so callers pass their stored preference each time. */
+  mode?: string;
   /** Extra ACP `_meta` to merge into `session/new`. */
   meta?: Record<string, unknown>;
 }
@@ -377,6 +382,10 @@ export class AgentRuntime {
     // Apply reasoning effort for agents that take it as a config option (Copilot).
     await this.applyConfigOptionEffort(opts.effort);
 
+    // Apply persisted operational mode (e.g. autopilot). ACP session modes are
+    // not carried by session/new, so re-apply the stored choice every time.
+    await this.applyMode(opts.mode);
+
     return this.sessionInfo;
   }
 
@@ -386,6 +395,7 @@ export class AgentRuntime {
     cwd: string;
     model?: string;
     effort?: string;
+    mode?: string;
   }): Promise<SessionInfo> {
     const conn = this.requireConnection();
     const meta: Record<string, unknown> = {
@@ -433,6 +443,10 @@ export class AgentRuntime {
     // Re-apply reasoning effort on resume (config options don't persist across
     // a subprocess restart any more than the model does).
     await this.applyConfigOptionEffort(opts.effort);
+
+    // Re-apply persisted operational mode on resume — ACP modes reset to the
+    // agent default across a subprocess restart just like the model does.
+    await this.applyMode(opts.mode);
 
     return this.sessionInfo;
   }
@@ -558,6 +572,45 @@ export class AgentRuntime {
         { err, effort, configId: eff.configId },
         "failed to apply reasoning-effort config option"
       );
+    }
+  }
+
+  /** Resolve a user-supplied mode string — a full ACP mode id, a mode name, or
+   *  a short suffix like "autopilot" — to an advertised mode id for the current
+   *  session, or undefined when the agent advertises no matching mode. */
+  resolveModeId(input: string): string | undefined {
+    const modes = this.sessionInfo?.availableModes ?? [];
+    const lower = input.trim().toLowerCase();
+    return (
+      modes.find((m) => m.id === input)?.id ??
+      modes.find((m) => m.id.toLowerCase() === lower)?.id ??
+      modes.find((m) => m.id.toLowerCase().endsWith("#" + lower))?.id ??
+      modes.find((m) => m.name.toLowerCase() === lower)?.id
+    );
+  }
+
+  /** (Re)apply an operational mode to the live session. Resolves friendly names
+   *  to advertised ids, skips when already current, and returns the applied id
+   *  (or undefined when it couldn't be resolved/applied). ACP session modes do
+   *  not persist across session/new or a subprocess restart, so this runs on
+   *  every new/load using the caller's stored preference. */
+  async applyMode(input?: string): Promise<string | undefined> {
+    if (!input) return undefined;
+    const resolved = this.resolveModeId(input);
+    if (!resolved) {
+      this.logger.warn(
+        { input, availableModes: this.sessionInfo?.availableModes },
+        "requested mode not advertised by agent; leaving current mode"
+      );
+      return undefined;
+    }
+    if (this.sessionInfo?.currentModeId === resolved) return resolved;
+    try {
+      await this.setMode(resolved);
+      return resolved;
+    } catch (err) {
+      this.logger.warn({ err, input, resolved }, "failed to apply mode");
+      return undefined;
     }
   }
 
