@@ -2915,22 +2915,30 @@ export class Orchestrator {
     }
     const id = i.options.getString("id", true);
     const cfg = this.store.readConfig(record);
-    cfg.mode = id;
-    this.persistConfig(record, cfg);
     let message: string;
     if (this.router.hasRuntime(record.id)) {
       try {
         const rt = await this.router.getOrStartRuntime(record);
         const applied = await rt.applyMode(id);
-        message = applied
-          ? `Mode set to \`${applied}\`.`
-          : `⚠️ Couldn't switch to \`${id}\` — the agent didn't advertise that mode. Stored it; it'll be retried next turn.`;
+        if (applied) {
+          // Persist the resolved, advertised mode id (not the raw input).
+          cfg.mode = applied;
+          this.persistConfig(record, cfg);
+          message = `Mode set to \`${applied}\`.`;
+        } else {
+          // Don't persist an input the live agent doesn't advertise.
+          message = `⚠️ \`${id}\` isn't a mode this agent advertises — mode unchanged.`;
+        }
       } catch (err) {
         this.logger.warn({ err }, "live mode set failed");
-        message = `⚠️ Failed to switch mode live (stored \`${id}\`; will retry next turn).`;
+        message = `⚠️ Failed to switch mode (\`${id}\`) — mode unchanged.`;
       }
     } else {
-      message = `Mode \`${id}\` will apply on the next turn.`;
+      // No live session yet: we can't validate against advertised modes, so
+      // store optimistically and attempt to apply on the next turn.
+      cfg.mode = id;
+      this.persistConfig(record, cfg);
+      message = `Mode \`${id}\` will be attempted on the next turn.`;
     }
     await i.reply({ content: message, flags: MessageFlags.Ephemeral });
   }

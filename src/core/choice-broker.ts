@@ -230,7 +230,12 @@ export class ChoiceBroker {
       return this.safeJson(res, 200, { status: "error", error: "presenter failed" });
     } finally {
       clearTimeout(timer);
-      this.active.delete(reg.key);
+      // Only clear the lock if it's still *ours*: a previous runtime generation
+      // for the same key could have started a new choice after we were aborted,
+      // and we must not delete its lock.
+      if (this.active.get(reg.key) === ac) {
+        this.active.delete(reg.key);
+      }
     }
   }
 
@@ -290,7 +295,7 @@ export function normalizePrompt(raw: unknown): ChoicePrompt | undefined {
   }
 
   return {
-    question: r.question.slice(0, 1800),
+    question: r.question.slice(0, 1500),
     options,
     allowFreeText: r.allowFreeText !== false, // default true
   };

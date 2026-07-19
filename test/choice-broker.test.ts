@@ -132,6 +132,41 @@ describe("ChoiceBroker", () => {
     const after = await post(broker.callbackUrl, token, { question: "q", options: ["A"] });
     expect(after.status).toBe(401);
   });
+
+  it("a stale generation's completion doesn't clear a newer choice's lock", async () => {
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((r) => (releaseA = r));
+    let releaseB!: () => void;
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    let n = 0;
+    const presenter: ChoicePresenter = async () => {
+      n++;
+      if (n === 1) {
+        await gateA;
+        return { status: "cancelled" };
+      }
+      await gateB;
+      return { status: "selected", optionId: "0", label: "B" };
+    };
+    broker = await makeBroker(presenter, 60_000);
+    const t1 = broker.registerRuntime("gen-key");
+    const t2 = broker.registerRuntime("gen-key"); // same key, new generation
+
+    const aReq = post(broker.callbackUrl, t1, { question: "q", options: ["A", "A2"] });
+    await new Promise((r) => setTimeout(r, 40));
+    broker.revoke(t1); // aborts A and frees the lock for the new generation
+    const bReq = post(broker.callbackUrl, t2, { question: "q", options: ["B", "B2"] });
+    await new Promise((r) => setTimeout(r, 40));
+    releaseA(); // stale generation completes — must NOT delete B's lock
+    await aReq;
+    await new Promise((r) => setTimeout(r, 20));
+
+    const third = await post(broker.callbackUrl, t2, { question: "q", options: ["C", "C2"] });
+    expect(third.status).toBe(409); // B still holds the active lock
+
+    releaseB();
+    await bReq;
+  });
 });
 
 describe("normalizePrompt", () => {

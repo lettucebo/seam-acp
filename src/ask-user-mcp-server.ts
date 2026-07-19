@@ -41,8 +41,8 @@ function formatOutcome(o: BrokerOutcome): string {
       return `The user typed a custom answer: ${o.freeText ?? ""}`;
     case "timed_out":
       return (
-        "The user did not answer in time. Use your best judgement to proceed, " +
-        "or ask again if the decision is essential."
+        "The user did not answer in time. Do NOT assume approval or pick for " +
+        "them — either ask again, or stop and wait for the user."
       );
     case "cancelled":
       return "The user cancelled this request.";
@@ -58,26 +58,27 @@ server.registerTool(
   {
     title: "Ask the user to choose",
     description:
-      "Ask the human operator to make a decision and WAIT for their answer. " +
-      "ALWAYS call this whenever you need the user to choose between options, " +
-      "confirm a direction, or approve moving to the next step (e.g. switching " +
-      "to autopilot) — instead of only asking in prose, which the user may not " +
-      "see promptly. Provide the concrete options you want them to pick from. " +
-      "The user can select an option or type a custom answer, which is returned " +
-      "to you as the tool result.",
+      "Put a multiple-choice decision to the human operator and WAIT for their " +
+      "pick. Use this whenever you need the user to choose between concrete " +
+      "options or confirm a direction, instead of only asking in prose (which " +
+      "they may not see promptly). Always pass 2-25 explicit options; for a " +
+      "yes/no question pass [\"Yes\", \"No\"]. The user's selected option label " +
+      "is returned to you. (This does not change agent settings by itself — it " +
+      "only returns the user's answer.)",
     inputSchema: {
-      question: z.string().describe("The question to ask the user."),
+      question: z.string().describe("The question / decision to put to the user."),
       options: z
         .array(z.string())
-        .optional()
-        .describe("Selectable answer options (0-25). Omit for a yes/no or open prompt."),
-      allow_free_text: z
-        .boolean()
-        .optional()
-        .describe("Allow the user to type a custom answer instead of picking (default true)."),
+        .min(2)
+        .max(25)
+        .describe(
+          "The 2-25 concrete choices the user picks from. Required. For a " +
+            "yes/no confirmation pass [\"Yes\", \"No\"]. For open-ended questions " +
+            "with no fixed choices, do NOT call this tool — ask in prose instead."
+        ),
     },
   },
-  async ({ question, options, allow_free_text }) => {
+  async ({ question, options }) => {
     if (!CHOICE_URL || !CHOICE_TOKEN) {
       return {
         content: [
@@ -95,8 +96,8 @@ server.registerTool(
         },
         body: JSON.stringify({
           question,
-          options: options ?? [],
-          allowFreeText: allow_free_text ?? true,
+          options,
+          allowFreeText: false,
         }),
       });
       const outcome = (await res.json()) as BrokerOutcome;

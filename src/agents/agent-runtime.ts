@@ -771,6 +771,14 @@ export class AgentRuntime {
         return;
       }
       case "current_mode_update": {
+        // Keep our cached session view in sync so applyMode()'s "already
+        // current" check stays accurate when the agent changes mode itself.
+        if (this.sessionInfo) {
+          this.sessionInfo = {
+            ...this.sessionInfo,
+            currentModeId: update.currentModeId,
+          };
+        }
         await this.emit({ kind: "mode-changed", modeId: update.currentModeId });
         return;
       }

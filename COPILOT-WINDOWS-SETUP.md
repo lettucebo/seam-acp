@@ -32,7 +32,7 @@ Discord(手機/桌面) ──gateway──> seam-acp(Node) ──ACP stdio──
 1. 前往 <https://discord.com/developers/applications> → **New Application**。
 2. 左側 **Bot** → **Reset Token** → 複製 token（只顯示一次）。
 3. **Privileged Gateway Intents** 開啟 **MESSAGE CONTENT INTENT**。
-4. **OAuth2 → URL Generator**：scope 勾 `bot` + `applications.commands`；Bot 權限勾 Send Messages、Embed Links、Attach Files、Read Message History、Add Reactions、Create Public Threads、Manage Messages。
+4. **OAuth2 → URL Generator**：scope 勾 `bot` + `applications.commands`；Bot 權限勾 **View Channels、Send Messages、Send Messages in Threads**、Embed Links、Attach Files、Read Message History、Add Reactions、Create Public Threads、Manage Messages。（`Send Messages` 不含在 thread 內發言，務必勾 **Send Messages in Threads**。）
 5. 用產生的 URL 邀請 bot 進**你也在**的伺服器（建議私人伺服器）。
 6. 開啟 Discord 開發者模式，右鍵你的頭像 → Copy User ID（給 `DISCORD_ALLOWED_USER_IDS`）。
 
@@ -76,9 +76,12 @@ npm start          # = node dist/index.js
 ## 已知限制 / 待辦
 
 - **`ask_user` 是「盡力」機制**：Copilot 的原生 `ask_user` 不走 ACP，我們靠注入的 MCP 工具重現。模型「大多」會呼叫它（工具描述已強力指示），但仍可能改用純文字提問——此時直接在 thread 用文字回覆即可。
-- **「自行輸入」尚未做**：目前選單只支援點選項（buttons/select）。「Or type your own answer」需要 Discord modal，列為後續（需 token 邊做邊驗）。若模型呼叫 `ask_user` 但沒給選項，presenter 會請模型改用文字提問。
+- **只支援選項、無 free-text**：`ask_user` 一律要 **2–25 個明確選項**（是非題請用 `["Yes","No"]`）；沒有「自行輸入」欄位。開放式（無固定選項）問題模型會改用純文字提問。
+- **取消時 Discord 選單不會立即消失**：`/seam cancel` 或程式重啟時，已張貼的選單會保留到自身逾時（約 5 分鐘）才失效，期間點它不會有作用（後續可加 AbortSignal 連動即時失效）。
 - **Discord 端來回尚未實測**：伺服器側迴路已驗證；`adapter.sendChoicePicker`（貼按鈕、等點選）沿用專案既有、已被其他指令使用的原語，但整條 Discord 來回需 bot token 才能端到端驗證。
 - **多 thread 併發寫同一 repo**：請不同 thread 綁不同 repo/worktree，避免 git index 衝突。
+
+> 首次測試建議設 `DISCORD_DEV_GUILD_ID`（你的伺服器 ID），slash 指令會即時註冊；否則全域註冊可能要等約一小時才生效。
 
 ## 安全
 
