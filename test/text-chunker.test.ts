@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkForDiscord } from "../src/core/text-chunker.js";
+import { chunkForDiscord, chunkMarkdownForDiscord } from "../src/core/text-chunker.js";
 
 describe("chunkForDiscord", () => {
   it("returns empty for empty input", () => {
@@ -13,7 +13,6 @@ describe("chunkForDiscord", () => {
   it("normalizes CRLF to LF", () => {
     expect(chunkForDiscord("a\r\nb")).toEqual(["a\nb"]);
   });
-
   it("splits on a newline boundary near the end of a window", () => {
     // 200 chars of 'a', a newline, 200 chars of 'b'; cap at 250 should split at the newline
     const text = "a".repeat(200) + "\n" + "b".repeat(200);
@@ -57,5 +56,25 @@ describe("chunkForDiscord", () => {
     const text = "a".repeat(40) + "   \n" + "b".repeat(40);
     const chunks = chunkForDiscord(text, 50);
     expect(chunks[0]?.endsWith(" ")).toBe(false);
+  });
+});
+
+describe("chunkMarkdownForDiscord", () => {
+  it("passes short markdown through unchanged", () => {
+    expect(chunkMarkdownForDiscord("# Title\n- a\n- b")).toEqual(["# Title\n- a\n- b"]);
+  });
+
+  it("keeps a code fence balanced when it splits across chunks", () => {
+    const code = Array.from({ length: 60 }, (_, i) => `line ${i} ${"x".repeat(20)}`).join("\n");
+    const text = `intro\n\`\`\`ts\n${code}\n\`\`\`\nouter`;
+    const chunks = chunkMarkdownForDiscord(text, 400);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Every chunk must have an even number of ``` fences (balanced on its own).
+    for (const c of chunks) {
+      const fences = c.split("\n").filter((l) => /^\s*```/.test(l)).length;
+      expect(fences % 2).toBe(0);
+    }
+    // A mid-fence chunk reopens with the original language tag.
+    expect(chunks.some((c) => c.includes("```ts"))).toBe(true);
   });
 });

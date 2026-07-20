@@ -42,3 +42,38 @@ export function chunkForDiscord(text: string, maxLen = 1900): string[] {
 
   return result;
 }
+
+/**
+ * Like {@link chunkForDiscord}, but keeps fenced code blocks (```) balanced
+ * across chunk boundaries so every message renders as valid markdown on its
+ * own. When a chunk would end inside an open fence, a closing ``` is appended
+ * and the fence (with its language) is reopened at the start of the next chunk.
+ */
+export function chunkMarkdownForDiscord(text: string, maxLen = 1900): string[] {
+  const chunks = chunkForDiscord(text, maxLen);
+  const out: string[] = [];
+  let reopen: string | null = null;
+  for (const raw of chunks) {
+    let body = reopen ? `${reopen}\n${raw}` : raw;
+    let inFence = false;
+    let header = "```";
+    for (const line of body.split("\n")) {
+      if (/^\s*```/.test(line)) {
+        if (!inFence) {
+          inFence = true;
+          header = line.trim();
+        } else {
+          inFence = false;
+        }
+      }
+    }
+    if (inFence) {
+      body = `${body}\n\`\`\``;
+      reopen = header;
+    } else {
+      reopen = null;
+    }
+    out.push(body);
+  }
+  return out;
+}

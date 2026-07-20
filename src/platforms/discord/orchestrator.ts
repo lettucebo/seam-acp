@@ -18,6 +18,7 @@ import type { Logger } from "../../lib/logger.js";
 import type { Config } from "../../config.js";
 import type { Renderer } from "../renderer.js";
 import { serializePanelText } from "../renderer.js";
+import { chunkMarkdownForDiscord } from "../../core/text-chunker.js";
 import type {
   ChatAdapter,
   ChannelRef,
@@ -1093,7 +1094,7 @@ export class Orchestrator {
           // "顯示完整執行計畫" option inside offerPlanProceed. Short plan checklist
           // is shown by default in both cases.
           if (this.config.PLAN_FULL_AUTO) {
-            await this.postPlanDetail(channel, record).catch((err) =>
+            await this.postPlanDetail(channel, record, "file").catch((err) =>
               this.logger.warn({ err, session: record.id }, "auto post plan.md failed")
             );
           }
@@ -2959,12 +2960,18 @@ export class Orchestrator {
 
   /**
    * Post the FULL plan the writing-plans skill wrote to Copilot's session-state
-   * `plan.md`, on demand (via the "show full plan" picker option). Delivered as
-   * an attached plan.md file — Discord's file card is the real expand/collapse
-   * (spoilers only blur/reveal, which the operator didn't want). Copilot only
-   * summarizes the plan in chat, so this surfaces the complete detail.
+   * `plan.md`. Two delivery modes:
+   *  - "file" (Approach 2 / auto): attach plan.md as a Discord file card, which
+   *    has a real expand/collapse.
+   *  - "text" (Approach 1 / on-demand button): print the full plan inline as
+   *    chunked plain messages (markdown rendered), no file card.
+   * Copilot only summarizes the plan in chat, so this surfaces the full detail.
    */
-  private async postPlanDetail(channel: ChannelRef, record: SessionRecord): Promise<void> {
+  private async postPlanDetail(
+    channel: ChannelRef,
+    record: SessionRecord,
+    mode: "file" | "text" = "file"
+  ): Promise<void> {
     let content = "";
     if (record.acpSessionId) {
       const profile = this.router.getProfile(record.agentId);
@@ -2986,16 +2993,19 @@ export class Orchestrator {
       );
       return;
     }
-    if (this.adapter.sendFile) {
+    if (mode === "file" && this.adapter.sendFile) {
       await this.adapter.sendFile(channel, {
         data: Buffer.from(content, "utf8"),
         filename: "plan.md",
         mimeType: "text/markdown",
       });
-    } else {
-      for (let i = 0; i < content.length; i += 1800) {
-        await this.adapter.sendMessage(channel, content.slice(i, i + 1800));
-      }
+      return;
+    }
+    // Text mode (or no sendFile): print the full plan inline as normal messages
+    // (Discord renders the markdown), split fence-aware so code blocks stay valid.
+    const header = "📋 完整執行計畫（plan.md）：";
+    for (const chunk of chunkMarkdownForDiscord(`${header}\n${content}`, 1900)) {
+      await this.adapter.sendMessage(channel, chunk);
     }
   }
 
@@ -3025,7 +3035,7 @@ export class Orchestrator {
       });
       if (!picked || picked.value === "keep") return;
       if (picked.value === "showplan") {
-        await this.postPlanDetail(channel, record).catch((err) =>
+        await this.postPlanDetail(channel, record, "text").catch((err) =>
           this.logger.warn({ err, session: record.id }, "show full plan failed")
         );
         continue; // re-offer the picker so they can still choose how to proceed
