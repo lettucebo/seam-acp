@@ -212,6 +212,24 @@ export class SessionStore {
       .run(record);
   }
 
+  /**
+   * Atomically re-point a session at a new repo and clear its ACP session id in
+   * a SINGLE narrow UPDATE. Unlike `upsert(record)` this does not rewrite the
+   * other mutable columns, so a concurrent finishing turn's config write cannot
+   * restore the old repo_path / acp_session_id (the spread-upsert restore bug).
+   */
+  rebind(id: string, repoPath: string): void {
+    this.db
+      .prepare(
+        `UPDATE sessions
+            SET repo_path = @repoPath,
+                acp_session_id = '',
+                updated_utc = @updatedUtc
+          WHERE id = @id`
+      )
+      .run({ id, repoPath, updatedUtc: new Date().toISOString() });
+  }
+
   // --- scheduled prompts ----------------------------------------------------
 
   upsertScheduled(s: ScheduledPrompt): void {

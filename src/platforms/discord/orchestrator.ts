@@ -72,6 +72,7 @@ import type { SessionStore } from "../../core/session-store.js";
 import { SessionRouter } from "../../core/session-router.js";
 import { TurnStatus, renderStatusPanel } from "../../core/status-panel.js";
 import { isWithinRoot, resolveRepoPath, resolveRepoWithinRoot } from "../../core/path-utils.js";
+import { RepoProvisioner } from "../../core/repo-provisioner.js";
 import { ATTACH_FENCE_LANG, withHarnessPreamble } from "../../core/agent-conventions.js";
 import { isModelInlineableAttachment } from "../../agents/attachments.js";
 import { stageAttachment, sweepStagedAttachments } from "../../agents/attachment-staging.js";
@@ -132,6 +133,9 @@ export class Orchestrator {
   /** Set by index.ts after construction; used by /seam schedule handlers to
    *  arm/disarm timers and by the fire runner to drop deleted-thread schedules. */
   private scheduledManager?: ScheduledPromptManager;
+  private readonly provisioner: RepoProvisioner;
+  /** In-flight repo provisioning (clone/new) per channel id — one at a time. */
+  private readonly provisioningThreads = new Set<string>();
 
   constructor(opts: {
     logger: Logger;
@@ -147,9 +151,17 @@ export class Orchestrator {
     this.router = opts.router;
     this.store = opts.store;
     this.renderer = opts.renderer;
+    this.provisioner = new RepoProvisioner(opts.config.REPOS_ROOT, this.logger, {
+      hostPolicy: opts.config.REPO_CLONE_HOST_POLICY,
+      ...(opts.config.REPO_CLONE_ALLOWED_HOSTS
+        ? { allowlistHosts: opts.config.REPO_CLONE_ALLOWED_HOSTS }
+        : {}),
+      cloneTimeoutMs: opts.config.REPO_CLONE_TIMEOUT_MS,
+    });
   }
 
   install(): void {
+    this.provisioner.sweepStaleStaging();
     this.adapter.onMessage((msg) => this.handleIncomingMessage(msg));
     this.adapter.onThreadDelete?.((channelRef) => this.handleThreadDeleted(channelRef));
     this.watchSentinel();
@@ -1387,6 +1399,10 @@ export class Orchestrator {
         return this.cmdRepo(interaction);
       case "list":
         return this.cmdRepos(interaction);
+      case "clone":
+        return this.cmdRepoClone(interaction);
+      case "new":
+        return this.cmdRepoNew(interaction);
       default:
         await interaction.reply({
           content: `Unknown repo subcommand: ${sub}`,
@@ -2891,9 +2907,8 @@ export class Orchestrator {
       });
       return null;
     }
-    let target: string;
     try {
-      target = resolveRepoWithinRoot(this.config.REPOS_ROOT, requestedPath);
+      return await this.doBind(this.channelRefFromInteraction(i)!, requestedPath);
     } catch (err) {
       await i.reply({
         content: `❌ ${(err as Error).message}`,
@@ -2901,21 +2916,103 @@ export class Orchestrator {
       });
       return null;
     }
-    const channel = this.channelRefFromInteraction(i)!;
+  }
+
+  /**
+   * Bind a channel's session to a repo path (resolved + realpath-confined to
+   * REPOS_ROOT) and start a fresh conversation. Throws on validation failure;
+   * touches no Discord surface (callers own the reply / editReply).
+   */
+  private async doBind(channel: ChannelRef, requestedPath: string): Promise<string> {
+    const target = resolveRepoWithinRoot(this.config.REPOS_ROOT, requestedPath);
     const record = this.router.ensureSessionRecord({
       platform: channel.platform,
       channelRef: channel.id,
       ...(channel.parentId ? { parentRef: channel.parentId } : {}),
       cwd: this.config.REPOS_ROOT,
     });
-    this.store.upsert({
-      ...record,
-      repoPath: target,
-      updatedUtc: new Date().toISOString(),
-    });
-    // Fresh runtime + fresh ACP conversation against the new cwd.
-    await this.router.beginNewConversationAtCwd(record.id);
+    await this.router.rebindRepo(record.id, target);
     return target;
+  }
+
+  private async cmdRepoClone(i: ChatInputCommandInteraction): Promise<void> {
+    const ch = i.channel;
+    if (!ch || !ch.isThread()) {
+      await i.reply({
+        content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    const channel = this.channelRefFromInteraction(i)!;
+    const source = i.options.getString("source", true);
+    const name = i.options.getString("name") ?? undefined;
+    if (this.provisioningThreads.has(channel.id)) {
+      await i.reply({
+        content: "此 thread 已有一個 clone / 建立作業進行中，請稍候。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    this.provisioningThreads.add(channel.id);
+    await i.deferReply(); // non-ephemeral, thread-visible ack within 3s
+    try {
+      await i.editReply(`🔄 Cloning \`${source}\` …`);
+      const result = await this.provisioner.clone(source, name);
+      try {
+        const bound = await this.doBind(channel, result.path);
+        await i.editReply(
+          `✅ Cloned and bound \`${this.repoDisplay(bound)}\`. Your next message starts a fresh session here.`
+        );
+      } catch (bindErr) {
+        await i.editReply(
+          `✅ Cloned to \`${this.repoDisplay(result.path)}\`, but binding failed: ${(bindErr as Error).message}\nRun \`/seam repo set ${result.name}\`.`
+        );
+      }
+    } catch (err) {
+      await i.editReply(`❌ Clone failed: ${(err as Error).message}`);
+    } finally {
+      this.provisioningThreads.delete(channel.id);
+    }
+  }
+
+  private async cmdRepoNew(i: ChatInputCommandInteraction): Promise<void> {
+    const ch = i.channel;
+    if (!ch || !ch.isThread()) {
+      await i.reply({
+        content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    const channel = this.channelRefFromInteraction(i)!;
+    const name = i.options.getString("name", true);
+    if (this.provisioningThreads.has(channel.id)) {
+      await i.reply({
+        content: "此 thread 已有一個 clone / 建立作業進行中，請稍候。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    this.provisioningThreads.add(channel.id);
+    await i.deferReply();
+    try {
+      await i.editReply(`🔄 Creating \`${name}\` …`);
+      const result = await this.provisioner.init(name);
+      const bound = await this.doBind(channel, result.path);
+      await i.editReply(
+        `✅ Created and bound \`${this.repoDisplay(bound)}\` (empty git repo). Your next message starts a fresh session here.`
+      );
+    } catch (err) {
+      await i.editReply(`❌ Create failed: ${(err as Error).message}`);
+    } finally {
+      this.provisioningThreads.delete(channel.id);
+    }
+  }
+
+  /** Called on shutdown: kill any in-flight clone/init child process trees. */
+  shutdownProvisioning(): void {
+    this.provisioner.shutdown();
   }
 
   private async cmdModel(i: ChatInputCommandInteraction): Promise<void> {
@@ -5783,6 +5880,8 @@ export class Orchestrator {
       "`/seam init` — bind this thread + show repo picker",
       "`/seam repo set <path>` — set working repo (type to search / autocomplete)",
       "`/seam repo list` — list repos under REPOS_ROOT",
+      "`/seam repo clone <source> [name]` — clone a remote repo and bind it",
+      "`/seam repo new <name>` — create a new empty repo and bind it",
       "`/seam model [id]` — get / set agent model",
       "`/seam mode <id>` — set agent operational mode",
       "`/seam effort <low|medium|high>` — reasoning effort",
@@ -6092,12 +6191,7 @@ export class Orchestrator {
       ...(channel.parentId ? { parentRef: channel.parentId } : {}),
       cwd: this.config.REPOS_ROOT,
     });
-    this.store.upsert({
-      ...record,
-      repoPath: picked,
-      updatedUtc: new Date().toISOString(),
-    });
-    await this.router.beginNewConversationAtCwd(record.id);
+    await this.router.rebindRepo(record.id, picked);
 
     if (this.config.NEW_THREAD_WIZARD === "full") {
       await this.adapter.sendMessage(

@@ -69,6 +69,26 @@ const Schema = z.object({
   REPOS_ROOT: z.string().min(1, "REPOS_ROOT is required"),
   DATA_DIR: z.string().default("./data"),
   /**
+   * Host policy for `/seam repo clone`:
+   *  - `github` (default): only github.com via `gh` — eliminates the SSRF class.
+   *  - `public`: any external host over https/ssh, but internal/loopback blocked.
+   *  - `allowlist`: only hosts listed in REPO_CLONE_ALLOWED_HOSTS.
+   */
+  REPO_CLONE_HOST_POLICY: z.enum(["github", "public", "allowlist"]).default("github"),
+  /** Comma-separated hostnames permitted when REPO_CLONE_HOST_POLICY=allowlist. */
+  REPO_CLONE_ALLOWED_HOSTS: z
+    .string()
+    .default("")
+    .transform((v) => {
+      const hosts = v
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      return hosts.length > 0 ? new Set(hosts) : undefined;
+    }),
+  /** Max wall-clock for a single clone/init before tree-kill (ms). */
+  REPO_CLONE_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
+  /**
    * Comma-separated list of absolute directories the `/seam attach`
    * slash command is allowed to read from. REPOS_ROOT is always
    * implicitly allowed. Defaults to empty (only REPOS_ROOT).

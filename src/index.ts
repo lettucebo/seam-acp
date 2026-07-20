@@ -472,6 +472,11 @@ async function main(): Promise<void> {
       logger.warn({ err }, "choice-broker stop failed");
     }
     try {
+      orchestrator.shutdownProvisioning();
+    } catch (err) {
+      logger.warn({ err }, "provisioner shutdown failed");
+    }
+    try {
       await router.disposeAll();
     } catch (err) {
       logger.warn({ err }, "router disposeAll failed");

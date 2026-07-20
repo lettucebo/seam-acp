@@ -44,6 +44,34 @@ export function buildSeamCommand(): SlashCommandBuilder {
       .addSubcommand((sub) =>
         sub.setName("list").setDescription("List repos under REPOS_ROOT")
       )
+      .addSubcommand((sub) =>
+        sub
+          .setName("clone")
+          .setDescription("Clone a remote repo into REPOS_ROOT and bind it")
+          .addStringOption((o) =>
+            o
+              .setName("source")
+              .setDescription("owner/repo, https://…, ssh://…, or git@host:owner/repo")
+              .setRequired(true)
+          )
+          .addStringOption((o) =>
+            o
+              .setName("name")
+              .setDescription("Optional folder name (defaults to the repo name)")
+              .setRequired(false)
+          )
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("new")
+          .setDescription("Create a new empty git repo in REPOS_ROOT and bind it")
+          .addStringOption((o) =>
+            o
+              .setName("name")
+              .setDescription("New project folder name")
+              .setRequired(true)
+          )
+      )
   );
 
   cmd.addSubcommand((sub) =>

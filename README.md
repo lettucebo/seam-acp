@@ -35,6 +35,9 @@ Copy `.env.example` to `.env` and fill it in.
 | `DISCORD_ALLOWED_CHANNEL_IDS` | no | Comma-separated parent channel IDs the bot is allowed to operate in. When set, the bot only responds in threads whose parent channel is in this list. When unset, all channels are allowed. |
 | `DISCORD_DEV_GUILD_ID` | no | Set to register slash commands instantly to one guild (good for dev) |
 | `REPOS_ROOT` | yes | Root folder containing repos the agent can touch |
+| `REPO_CLONE_HOST_POLICY` | no | `/seam repo clone` host policy: `github` (default — only github.com, safest), `public` (any external host over https/ssh; internal/loopback blocked), or `allowlist` |
+| `REPO_CLONE_ALLOWED_HOSTS` | no | Comma-separated hostnames permitted when `REPO_CLONE_HOST_POLICY=allowlist` |
+| `REPO_CLONE_TIMEOUT_MS` | no | Per clone/init timeout before the process tree is killed (default `300000`) |
 | `ATTACH_ROOTS` | no | Comma-separated extra absolute directories the `/seam attach` command (and the agent-side fence-to-file shortcut) can read from. `REPOS_ROOT` is always allowed. |
 | `DATA_DIR` | no | Defaults to `./data` (sqlite lives here) |
 | `DEFAULT_AGENT` | no | `copilot` (default), `agy`, or `claude`. Plus any `copilot-<id>` / `agy-<id>` / `claude-<id>` registered via the `*_PROFILES` vars. |
@@ -117,6 +120,8 @@ All commands are restricted to users listed in `DISCORD_ALLOWED_USER_IDS` and (w
 | `/seam init` | Bind the current thread as a session and post the repo picker |
 | `/seam repo set <path>` | Set the working repo (type to search — autocomplete over `REPOS_ROOT`) |
 | `/seam repo list` | List repos found under `REPOS_ROOT` (hidden directories are skipped) |
+| `/seam repo clone <source> [name]` | Clone a remote repo (`owner/repo`, https, ssh, scp) into `REPOS_ROOT` and bind this thread to it. Host policy via `REPO_CLONE_HOST_POLICY` (default: github-only) |
+| `/seam repo new <name>` | Create a new empty git repo under `REPOS_ROOT` and bind this thread to it |
 | `/seam agent [id]` | With no id: posts an interactive picker of registered profiles. With id: switch directly. |
 | `/seam model [id]` | With no id: starts the agent if needed and posts a picker of advertised models. With id: set directly (live if a runtime is active). |
 | `/seam mode <id>` | Set the agent operational mode (e.g. plan / agent / autopilot) |
