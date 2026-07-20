@@ -3035,6 +3035,7 @@ export class Orchestrator {
           { value: "keep", label: "✋ 保持 Plan（我要補充）" },
         ],
         authorizedUserIds: this.config.DISCORD_ALLOWED_USER_IDS,
+        timeoutMs: 0, // never time out — the picker stays clickable indefinitely
       });
       if (!picked || picked.value === "keep") return;
       if (picked.value === "showplan") {

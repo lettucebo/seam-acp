@@ -167,6 +167,9 @@ export class DiscordAdapter implements ChatAdapter {
     }
   ): Promise<{ value: string; userId: string } | null> {
     const ch = await this.fetchSendableChannel(channel.id);
+    // timeoutMs <= 0 means "never time out" — the picker stays clickable until
+    // a choice is made (or the message is removed).
+    const noTimeout = opts.timeoutMs !== undefined && opts.timeoutMs <= 0;
     const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
 
     const choices = opts.choices.slice(0, 25);
@@ -233,7 +236,8 @@ export class DiscordAdapter implements ChatAdapter {
           }
           return true;
         },
-        time: timeoutMs,
+        // Omit `time` to wait indefinitely when no timeout was requested.
+        ...(noTimeout ? {} : { time: timeoutMs }),
       });
 
       let pickedIdx: number;
