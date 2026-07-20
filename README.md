@@ -115,8 +115,8 @@ All commands are restricted to users listed in `DISCORD_ALLOWED_USER_IDS` and (w
 |---|---|
 | `/seam new [name]` | Create a new public thread, bind a session to it, and post the repo picker — all in one step |
 | `/seam init` | Bind the current thread as a session and post the repo picker |
-| `/seam repo <path>` | Set the working repo (relative to `REPOS_ROOT` or absolute under it) |
-| `/seam repos` | List repos found under `REPOS_ROOT` (hidden directories are skipped) |
+| `/seam repo set <path>` | Set the working repo (type to search — autocomplete over `REPOS_ROOT`) |
+| `/seam repo list` | List repos found under `REPOS_ROOT` (hidden directories are skipped) |
 | `/seam agent [id]` | With no id: posts an interactive picker of registered profiles. With id: switch directly. |
 | `/seam model [id]` | With no id: starts the agent if needed and posts a picker of advertised models. With id: set directly (live if a runtime is active). |
 | `/seam mode <id>` | Set the agent operational mode (e.g. plan / agent / autopilot) |

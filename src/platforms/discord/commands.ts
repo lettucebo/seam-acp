@@ -25,15 +25,24 @@ export function buildSeamCommand(): SlashCommandBuilder {
       )
   );
 
-  cmd.addSubcommand((sub) =>
-    sub
+  cmd.addSubcommandGroup((g) =>
+    g
       .setName("repo")
-      .setDescription("Set the working repo for this thread")
-      .addStringOption((o) =>
-        o
-          .setName("path")
-          .setDescription("Path under REPOS_ROOT (or absolute)")
-          .setRequired(true)
+      .setDescription("Manage the working repo for this thread")
+      .addSubcommand((sub) =>
+        sub
+          .setName("set")
+          .setDescription("Set the working repo for this thread (type to search)")
+          .addStringOption((o) =>
+            o
+              .setName("path")
+              .setDescription("Repo under REPOS_ROOT")
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+      )
+      .addSubcommand((sub) =>
+        sub.setName("list").setDescription("List repos under REPOS_ROOT")
       )
   );
 
@@ -143,10 +152,6 @@ export function buildSeamCommand(): SlashCommandBuilder {
 
   cmd.addSubcommand((sub) =>
     sub.setName("sessions").setDescription("List recent sessions")
-  );
-
-  cmd.addSubcommand((sub) =>
-    sub.setName("repos").setDescription("List repos under REPOS_ROOT")
   );
 
   cmd.addSubcommand((sub) =>

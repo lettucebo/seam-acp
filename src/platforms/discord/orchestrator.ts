@@ -3,7 +3,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { MessageFlags, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder, type ChatInputCommandInteraction, type MessageComponentInteraction, type Message } from "discord.js";
+import { MessageFlags, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder, type ChatInputCommandInteraction, type AutocompleteInteraction, type MessageComponentInteraction, type Message } from "discord.js";
 import {
   IMAGE_MODELS,
   getImageModelById,
@@ -1323,12 +1323,13 @@ export class Orchestrator {
     if (interaction.options.getSubcommandGroup(false) === "schedule") {
       return this.cmdSchedule(interaction);
     }
+    if (interaction.options.getSubcommandGroup(false) === "repo") {
+      return this.cmdRepoGroup(interaction);
+    }
     const sub = interaction.options.getSubcommand(true);
     switch (sub) {
       case "new":
         return this.cmdNew(interaction);
-      case "repo":
-        return this.cmdRepo(interaction);
       case "model":
         return this.cmdModel(interaction);
       case "mode":
@@ -1353,8 +1354,6 @@ export class Orchestrator {
         return this.cmdConfigSet(interaction);
       case "sessions":
         return this.cmdSessions(interaction);
-      case "repos":
-        return this.cmdRepos(interaction);
       case "init":
         return this.cmdInit(interaction);
       case "approve":
@@ -1377,6 +1376,88 @@ export class Orchestrator {
           flags: MessageFlags.Ephemeral,
         });
     }
+  }
+
+  private async cmdRepoGroup(
+    interaction: ChatInputCommandInteraction
+  ): Promise<void> {
+    const sub = interaction.options.getSubcommand(true);
+    switch (sub) {
+      case "set":
+        return this.cmdRepo(interaction);
+      case "list":
+        return this.cmdRepos(interaction);
+      default:
+        await interaction.reply({
+          content: `Unknown repo subcommand: ${sub}`,
+          flags: MessageFlags.Ephemeral,
+        });
+    }
+  }
+
+  /**
+   * Autocomplete for `/seam repo set <path>`. Substring-matches REPOS_ROOT
+   * children by basename, ranks most-recently-bound repos first (so the ones
+   * you actually use surface even past Discord's 25-choice cap), then falls
+   * back to alphabetic. This is what makes repos like `Work` reachable even
+   * though the static picker truncates at 25.
+   */
+  async handleAutocomplete(
+    interaction: AutocompleteInteraction
+  ): Promise<void> {
+    try {
+      const group = interaction.options.getSubcommandGroup(false);
+      const sub = interaction.options.getSubcommand(false);
+      const focused = interaction.options.getFocused(true);
+      if (group === "repo" && sub === "set" && focused.name === "path") {
+        await interaction.respond(
+          this.repoAutocompleteChoices(String(focused.value))
+        );
+        return;
+      }
+      await interaction.respond([]);
+    } catch (err) {
+      this.logger.warn({ err }, "repo autocomplete failed");
+      try {
+        await interaction.respond([]);
+      } catch {
+        /* interaction may already be resolved */
+      }
+    }
+  }
+
+  private repoAutocompleteChoices(
+    query: string
+  ): { name: string; value: string }[] {
+    const dirs = this.listRepoDirs(); // full paths, excludes dot dirs (.staging-*)
+    if (!dirs) return [];
+    const q = query.trim().toLowerCase();
+
+    // Most-recent bind time per repo path, from the session store.
+    const recency = new Map<string, number>();
+    for (const rec of this.store.list(200)) {
+      if (!rec.repoPath) continue;
+      const key = rec.repoPath.toLowerCase();
+      const t = Date.parse(rec.updatedUtc ?? "") || 0;
+      if (t > (recency.get(key) ?? 0)) recency.set(key, t);
+    }
+
+    const matched = dirs.filter((d) =>
+      path.basename(d).toLowerCase().includes(q)
+    );
+    matched.sort((a, b) => {
+      const ra = recency.get(a.toLowerCase()) ?? 0;
+      const rb = recency.get(b.toLowerCase()) ?? 0;
+      if (ra !== rb) return rb - ra; // most-recently-used first
+      return path.basename(a).localeCompare(path.basename(b));
+    });
+
+    return matched.slice(0, 25).map((d) => {
+      const name = path.basename(d);
+      // value = basename (relative to REPOS_ROOT); bindRepo joins it under the
+      // root, keeping the value well under Discord's 100-char limit.
+      return { name: name.slice(0, 100), value: name.slice(0, 100) };
+    });
   }
 
   private async probeCopilotContext(
@@ -5700,8 +5781,8 @@ export class Orchestrator {
       "",
       "`/seam new [name]` — create a new agent thread",
       "`/seam init` — bind this thread + show repo picker",
-      "`/seam repo <path>` — set working repo (under REPOS_ROOT)",
-      "`/seam repos` — list repos under REPOS_ROOT",
+      "`/seam repo set <path>` — set working repo (type to search / autocomplete)",
+      "`/seam repo list` — list repos under REPOS_ROOT",
       "`/seam model [id]` — get / set agent model",
       "`/seam mode <id>` — set agent operational mode",
       "`/seam effort <low|medium|high>` — reasoning effort",
@@ -5949,21 +6030,21 @@ export class Orchestrator {
     if (dirs.length === 0) {
       await this.adapter.sendMessage(
         channel,
-        `⚠️ No repos under \`${this.config.REPOS_ROOT}\`. Use \`/seam repo <path>\`.`
+        `⚠️ No repos under \`${this.config.REPOS_ROOT}\`. Use \`/seam repo set <path>\`.`
       );
       return;
     }
 
     if (!this.adapter.sendChoicePicker) {
       // Adapter without interactive picker: list paths and let the user
-      // pick via /seam repo <path>.
+      // pick via /seam repo set <path>.
       const lines = dirs
         .slice(0, 20)
         .map((p) => `• ${path.basename(p)}`)
         .join("\n");
       await this.adapter.sendMessage(
         channel,
-        `🗂️ **Available repos**\n${this.renderer.codeBlock(lines)}\nUse \`/seam repo <name>\`.`
+        `🗂️ **Available repos**\n${this.renderer.codeBlock(lines)}\nUse \`/seam repo set <name>\`.`
       );
       return;
     }
@@ -5976,7 +6057,7 @@ export class Orchestrator {
       panel: {
         color: 0x5865f2,
         title: "🗂️ Select a project to begin",
-        description: overflow > 0 ? `_(Showing first 25 of ${dirs.length} projects. Use \`/seam repo <path>\` to access the rest.)_` : undefined,
+        description: overflow > 0 ? `_(Showing first 25 of ${dirs.length} projects. Use \`/seam repo set <path>\` to access the rest.)_` : undefined,
         fields: [],
       },
       choices: top.map((p) => ({

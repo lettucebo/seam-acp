@@ -18,6 +18,7 @@ import {
   type TextChannel,
   type ThreadChannel,
   type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
 } from "discord.js";
 import type {
   RequestPermissionRequest,
@@ -43,6 +44,10 @@ export type SlashHandler = (
   interaction: ChatInputCommandInteraction
 ) => Promise<void>;
 
+export type AutocompleteHandler = (
+  interaction: AutocompleteInteraction
+) => Promise<void>;
+
 /**
  * discord.js v14 chat adapter.
  *
@@ -60,6 +65,7 @@ export class DiscordAdapter implements ChatAdapter {
   private readonly logger: Logger;
   private readonly config: Config;
   private readonly slashHandler: SlashHandler;
+  private readonly autocompleteHandler: AutocompleteHandler | undefined;
 
   private messageHandler?: (msg: IncomingMessage) => void | Promise<void>;
   private threadDeleteHandler?: (channelRef: string) => void | Promise<void>;
@@ -69,10 +75,12 @@ export class DiscordAdapter implements ChatAdapter {
     config: Config;
     logger: Logger;
     slashHandler: SlashHandler;
+    autocompleteHandler?: AutocompleteHandler;
   }) {
     this.config = opts.config;
     this.logger = opts.logger.child({ adapter: PLATFORM });
     this.slashHandler = opts.slashHandler;
+    this.autocompleteHandler = opts.autocompleteHandler;
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -525,6 +533,13 @@ export class DiscordAdapter implements ChatAdapter {
       });
     });
     this.client.on(Events.InteractionCreate, (interaction) => {
+      if (interaction.isAutocomplete()) {
+        if (interaction.commandName !== "seam") return;
+        this.handleAutocomplete(interaction).catch((err) => {
+          this.logger.error({ err }, "autocomplete handler crashed");
+        });
+        return;
+      }
       if (!interaction.isChatInputCommand()) return;
       if (interaction.commandName !== "seam") return;
       this.handleSlash(interaction).catch((err) => {
@@ -610,6 +625,35 @@ export class DiscordAdapter implements ChatAdapter {
       }
     }
     await this.slashHandler(interaction);
+  }
+
+  private async handleAutocomplete(
+    interaction: AutocompleteInteraction
+  ): Promise<void> {
+    // Autocomplete can only reply with suggestions, so an unauthorized caller
+    // gets an empty list (same gate as handleSlash: user + channel allowlist).
+    if (!this.autocompleteHandler) {
+      await interaction.respond([]);
+      return;
+    }
+    if (!this.config.DISCORD_ALLOWED_USER_IDS.has(interaction.user.id)) {
+      await interaction.respond([]);
+      return;
+    }
+    const allowedChannels = this.config.DISCORD_ALLOWED_CHANNEL_IDS;
+    if (allowedChannels) {
+      const ch = interaction.channel;
+      const parentId =
+        ch && "parentId" in ch && typeof ch.parentId === "string"
+          ? ch.parentId
+          : undefined;
+      const effectiveId = parentId ?? interaction.channelId ?? undefined;
+      if (!effectiveId || !allowedChannels.has(effectiveId)) {
+        await interaction.respond([]);
+        return;
+      }
+    }
+    await this.autocompleteHandler(interaction);
   }
 
   /** Push the PNG avatar. Resolves with true on success, false if file not found. */
