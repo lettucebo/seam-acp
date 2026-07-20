@@ -230,6 +230,32 @@ export class SessionStore {
       .run({ id, repoPath, updatedUtc: new Date().toISOString() });
   }
 
+  /**
+   * Narrow update of only `config_json` — used by config commands and turn
+   * finalizers so they never rewrite `repo_path` / `acp_session_id` from a
+   * possibly-stale in-memory record (a concurrent repo rebind must win).
+   */
+  updateConfig(id: string, configJson: string): void {
+    this.db
+      .prepare(
+        `UPDATE sessions SET config_json=@configJson, updated_utc=@updatedUtc WHERE id=@id`
+      )
+      .run({ id, configJson, updatedUtc: new Date().toISOString() });
+  }
+
+  /**
+   * Narrow update of only `acp_session_id` — used when a new ACP session is
+   * created out-of-band (e.g. compaction) so `repo_path` is never rewritten
+   * from a stale record.
+   */
+  setAcpSessionId(id: string, acpSessionId: string): void {
+    this.db
+      .prepare(
+        `UPDATE sessions SET acp_session_id=@acpSessionId, updated_utc=@updatedUtc WHERE id=@id`
+      )
+      .run({ id, acpSessionId, updatedUtc: new Date().toISOString() });
+  }
+
   // --- scheduled prompts ----------------------------------------------------
 
   upsertScheduled(s: ScheduledPrompt): void {

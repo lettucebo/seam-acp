@@ -57,6 +57,16 @@ describe("isInternalHost (SSRF guard)", () => {
       expect(isInternalHost(h)).toBe(false);
     }
   });
+  it("catches IPv4-mapped IPv6 and trailing-dot bypasses", () => {
+    for (const h of ["::ffff:127.0.0.1", "::ffff:169.254.169.254", "[::ffff:7f00:1]", "localhost.", "svc.internal.", "foo.local."]) {
+      expect(isInternalHost(h)).toBe(true);
+    }
+  });
+  it("does not over-block public hosts that merely start with fc/fd or end with a dot", () => {
+    for (const h of ["fd.io", "fc2.com", "example.com."]) {
+      expect(isInternalHost(h)).toBe(false);
+    }
+  });
 });
 
 describe("parseSource — github policy", () => {

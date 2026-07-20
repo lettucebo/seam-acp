@@ -328,6 +328,16 @@ export class Orchestrator {
       cwd: this.config.REPOS_ROOT,
     });
 
+    // Refuse turns while this thread is provisioning a repo (clone/new): the
+    // rebind at the end of provisioning would otherwise interrupt this turn.
+    if (this.provisioningThreads.has(channel.id)) {
+      await this.adapter.sendMessage(
+        channel,
+        "⏳ 這個 thread 正在 clone / 建立 repo，請等完成後再送訊息。"
+      );
+      return;
+    }
+
     // A new turn owns this session's status card now — cancel any lingering
     // "settle back to Monitoring" timer left by the previous turn's background
     // activity so it can't edit the new card.
@@ -1625,7 +1635,7 @@ export class Orchestrator {
       summary: built.seed,
     });
     record.acpSessionId = acNewId; // keep the in-memory record in sync (see getOrStartRuntime)
-    this.store.upsert({ ...record, updatedUtc: new Date().toISOString() });
+    this.store.setAcpSessionId(record.id, acNewId);
     await this.router.invalidate(record.id, { clearAcpSession: false });
 
     const elapsedSec = Math.round((Date.now() - compactStartedAt) / 1000);
@@ -2935,16 +2945,34 @@ export class Orchestrator {
     return target;
   }
 
-  private async cmdRepoClone(i: ChatInputCommandInteraction): Promise<void> {
+  /** Shared gate for provisioning subcommands: require a real thread and be
+   *  fail-closed unless DISCORD_ALLOWED_CHANNEL_IDS is configured (clone/new have
+   *  host-level side effects, so an unset allowlist must NOT mean "any channel"). */
+  private async guardProvisioning(
+    i: ChatInputCommandInteraction
+  ): Promise<ChannelRef | null> {
     const ch = i.channel;
     if (!ch || !ch.isThread()) {
       await i.reply({
         content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
         flags: MessageFlags.Ephemeral,
       });
-      return;
+      return null;
     }
-    const channel = this.channelRefFromInteraction(i)!;
+    if (!this.config.DISCORD_ALLOWED_CHANNEL_IDS) {
+      await i.reply({
+        content:
+          "Provisioning 已停用：請先設定 `DISCORD_ALLOWED_CHANNEL_IDS` 才能使用 `/seam repo clone|new`。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return null;
+    }
+    return this.channelRefFromInteraction(i)!;
+  }
+
+  private async cmdRepoClone(i: ChatInputCommandInteraction): Promise<void> {
+    const channel = await this.guardProvisioning(i);
+    if (!channel) return;
     const source = i.options.getString("source", true);
     const name = i.options.getString("name") ?? undefined;
     if (this.provisioningThreads.has(channel.id)) {
@@ -2955,8 +2983,8 @@ export class Orchestrator {
       return;
     }
     this.provisioningThreads.add(channel.id);
-    await i.deferReply(); // non-ephemeral, thread-visible ack within 3s
     try {
+      await i.deferReply(); // non-ephemeral, thread-visible ack within 3s
       await i.editReply(`🔄 Cloning \`${source}\` …`);
       const result = await this.provisioner.clone(source, name);
       try {
@@ -2970,22 +2998,15 @@ export class Orchestrator {
         );
       }
     } catch (err) {
-      await i.editReply(`❌ Clone failed: ${(err as Error).message}`);
+      await i.editReply(`❌ Clone failed: ${(err as Error).message}`).catch(() => {});
     } finally {
       this.provisioningThreads.delete(channel.id);
     }
   }
 
   private async cmdRepoNew(i: ChatInputCommandInteraction): Promise<void> {
-    const ch = i.channel;
-    if (!ch || !ch.isThread()) {
-      await i.reply({
-        content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    const channel = this.channelRefFromInteraction(i)!;
+    const channel = await this.guardProvisioning(i);
+    if (!channel) return;
     const name = i.options.getString("name", true);
     if (this.provisioningThreads.has(channel.id)) {
       await i.reply({
@@ -2995,16 +3016,22 @@ export class Orchestrator {
       return;
     }
     this.provisioningThreads.add(channel.id);
-    await i.deferReply();
     try {
+      await i.deferReply();
       await i.editReply(`🔄 Creating \`${name}\` …`);
       const result = await this.provisioner.init(name);
-      const bound = await this.doBind(channel, result.path);
-      await i.editReply(
-        `✅ Created and bound \`${this.repoDisplay(bound)}\` (empty git repo). Your next message starts a fresh session here.`
-      );
+      try {
+        const bound = await this.doBind(channel, result.path);
+        await i.editReply(
+          `✅ Created and bound \`${this.repoDisplay(bound)}\` (empty git repo). Your next message starts a fresh session here.`
+        );
+      } catch (bindErr) {
+        await i.editReply(
+          `✅ Created \`${result.name}\`, but binding failed: ${(bindErr as Error).message}\nRun \`/seam repo set ${result.name}\`.`
+        );
+      }
     } catch (err) {
-      await i.editReply(`❌ Create failed: ${(err as Error).message}`);
+      await i.editReply(`❌ Create failed: ${(err as Error).message}`).catch(() => {});
     } finally {
       this.provisioningThreads.delete(channel.id);
     }
@@ -6177,11 +6204,11 @@ export class Orchestrator {
     if (!result) return;
 
     const picked = result.value;
-    if (!isWithinRoot(picked, this.config.REPOS_ROOT)) {
-      await this.adapter.sendMessage(
-        channel,
-        `🛡️ Repo \`${picked}\` is outside REPOS_ROOT.`
-      );
+    let target: string;
+    try {
+      target = resolveRepoWithinRoot(this.config.REPOS_ROOT, picked);
+    } catch (err) {
+      await this.adapter.sendMessage(channel, `🛡️ ${(err as Error).message}`);
       return;
     }
 
@@ -6191,7 +6218,7 @@ export class Orchestrator {
       ...(channel.parentId ? { parentRef: channel.parentId } : {}),
       cwd: this.config.REPOS_ROOT,
     });
-    await this.router.rebindRepo(record.id, picked);
+    await this.router.rebindRepo(record.id, target);
 
     if (this.config.NEW_THREAD_WIZARD === "full") {
       await this.adapter.sendMessage(
@@ -6473,17 +6500,10 @@ export class Orchestrator {
     record: ReturnType<SessionRouter["ensureSessionRecord"]>,
     cfg: ReturnType<SessionStore["readConfig"]>
   ): void {
-    // acp_session_id is assigned out-of-band (getOrStartRuntime / compaction),
-    // so the caller's in-memory record can lag the DB. A config write must NEVER
-    // clobber the live session binding — take the authoritative id from the DB
-    // when present (defense-in-depth on top of keeping the record in sync).
-    const live = this.store.get(record.id)?.acpSessionId;
-    this.store.upsert({
-      ...record,
-      ...(live ? { acpSessionId: live } : {}),
-      configJson: this.store.writeConfig(cfg),
-      updatedUtc: new Date().toISOString(),
-    });
+    // Narrow write: touch only config_json. Never rewrite repo_path /
+    // acp_session_id from the (possibly stale) in-memory record — a concurrent
+    // repo rebind or out-of-band ACP-id assignment must not be clobbered.
+    this.store.updateConfig(record.id, this.store.writeConfig(cfg));
   }
 
   private repoDisplay(repoPath: string | null): string {

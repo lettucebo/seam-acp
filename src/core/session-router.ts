@@ -203,6 +203,18 @@ export class SessionRouter {
    * previous conversation against a different working directory.
    */
   async rebindRepo(sessionId: string, repoPath: string): Promise<void> {
+    // If a runtime is being created right now, let it finish first: creation
+    // performs its own upsert against the pre-rebind cwd, so we must rebind
+    // AFTER it to win the last write (otherwise the completing creation
+    // restores the old repo_path / acp id).
+    const inflight = this.creationLocks.get(sessionId);
+    if (inflight) {
+      try {
+        await inflight;
+      } catch {
+        /* creation failed; nothing to supersede */
+      }
+    }
     await this.invalidate(sessionId);
     this.store.rebind(sessionId, repoPath);
     this.logger.info(
@@ -289,7 +301,11 @@ export class SessionRouter {
       mcpServers: this.mcpServers,
       onDead: () => {
         this.logger.info({ sessionId: record.id }, "agent process died; evicting runtime for auto-resume");
-        this.runtimes.delete(record.id);
+        // Identity-safe: only evict when THIS runtime is still the cached one, so
+        // a late death of a superseded runtime can't delete its replacement.
+        if (this.runtimes.get(record.id) === runtime) {
+          this.runtimes.delete(record.id);
+        }
         if (choiceToken) this.choiceBroker?.revoke(choiceToken);
       },
       permissionPolicy: async (req) => {

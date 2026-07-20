@@ -63,12 +63,37 @@ function deriveNameFromPath(p: string): string {
   return last.replace(/\.git$/i, "");
 }
 
+/** Reject a GitHub owner/repo whose segments are empty or start with '-' (which
+ *  gh/git could treat as an option token). */
+function assertGhRefSafe(ownerRepo: string): void {
+  for (const seg of ownerRepo.split("/")) {
+    if (!seg || seg.startsWith("-")) {
+      throw new Error(`Invalid GitHub owner/repo segment: '${seg || "(empty)"}'`);
+    }
+  }
+}
+
 /** True for loopback / link-local / private / clearly-internal hosts (SSRF guard). */
 export function isInternalHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  let h = host.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  if (!h) return true;
+  h = h.replace(/\.+$/, ""); // strip trailing dot(s): "localhost." === "localhost"
   if (!h) return true;
   if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) {
     return true;
+  }
+  // IPv4-mapped IPv6 (::ffff:127.0.0.1 or ::ffff:7f00:1) — evaluate the inner v4
+  const mapped = h.match(/^::ffff:(.+)$/i);
+  if (mapped) {
+    const inner = mapped[1]!;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(inner)) return isInternalHost(inner);
+    const hx = inner.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (hx) {
+      const a = parseInt(hx[1]!, 16);
+      const b = parseInt(hx[2]!, 16);
+      return isInternalHost(`${(a >> 8) & 0xff}.${a & 0xff}.${(b >> 8) & 0xff}.${b & 0xff}`);
+    }
+    return true; // unknown mapped form — fail closed
   }
   const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
@@ -82,7 +107,10 @@ export function isInternalHost(host: string): boolean {
     return false;
   }
   if (h === "::1" || h === "::") return true;
-  if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true; // link-local / ULA
+  // IPv6 ULA / link-local — only when the host is actually an IPv6 literal (has ':')
+  if (h.includes(":") && (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))) {
+    return true;
+  }
   return false;
 }
 
@@ -133,6 +161,7 @@ export function parseSource(
     if (opts.hostPolicy === "allowlist" && !opts.allowlistHosts?.has("github.com")) {
       throw new Error("owner/repo shorthand needs github.com in REPO_CLONE_ALLOWED_HOSTS");
     }
+    assertGhRefSafe(source);
     return { kind: "gh", canonicalSource: source, defaultName: name };
   }
 
@@ -145,6 +174,7 @@ export function parseSource(
     const name = validateTargetName(deriveNameFromPath(pathPart));
     if (host.toLowerCase() === "github.com") {
       const ownerRepo = pathPart.replace(/\.git$/i, "");
+      assertGhRefSafe(ownerRepo);
       return { kind: "gh", canonicalSource: ownerRepo, defaultName: name };
     }
     return { kind: "git", canonicalSource: source, defaultName: name };
@@ -173,7 +203,9 @@ export function parseSource(
     if (segs.length >= 2) {
       const repo = (segs[1] ?? "").replace(/\.git$/i, "");
       const name = validateTargetName(repo);
-      return { kind: "gh", canonicalSource: `${segs[0]}/${repo}`, defaultName: name };
+      const ownerRepo = `${segs[0]}/${repo}`;
+      assertGhRefSafe(ownerRepo);
+      return { kind: "gh", canonicalSource: ownerRepo, defaultName: name };
     }
   }
   const name = validateTargetName(deriveNameFromPath(url.pathname));
@@ -190,7 +222,24 @@ function hardenedGitEnv(): NodeJS.ProcessEnv {
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
     GCM_INTERACTIVE: "never",
+    GIT_PROTOCOL_FROM_USER: "0",
+    // Apply core.symlinks=false to BOTH `git` and `gh`-spawned git (gh doesn't
+    // forward -c flags), so an untrusted clone can't materialize an escaping
+    // symlink. git-config env form is honored by every git the tools invoke.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.symlinks",
+    GIT_CONFIG_VALUE_0: "false",
   };
+}
+
+/** Throw a clear error if a required provisioning tool isn't on PATH (e.g. a
+ *  Copilot-only Docker image without git/gh). */
+function ensureToolAvailable(tool: string): void {
+  const probe = process.platform === "win32" ? "where" : "which";
+  const r = spawnSync(probe, [tool], { stdio: "ignore" });
+  if (r.status !== 0) {
+    throw new Error(`\`${tool}\` was not found on PATH; repo provisioning is unavailable on this host.`);
+  }
 }
 
 /** git -c hardening flags applied to every clone. */
@@ -249,6 +298,8 @@ export class RepoProvisioner {
     if (fs.existsSync(finalPath)) {
       throw new Error(`\`${name}\` already exists under REPOS_ROOT. Use \`/seam repo set ${name}\`.`);
     }
+    ensureToolAvailable(parsed.kind === "gh" ? GH : GIT);
+    await this.ensureDiskSpace();
     const staging = this.stagingDir();
     try {
       if (parsed.kind === "gh") {
@@ -270,6 +321,7 @@ export class RepoProvisioner {
     if (fs.existsSync(finalPath)) {
       throw new Error(`\`${name}\` already exists under REPOS_ROOT. Use \`/seam repo set ${name}\`.`);
     }
+    ensureToolAvailable(GIT);
     const staging = this.stagingDir();
     try {
       await fsp.mkdir(staging);
@@ -301,6 +353,22 @@ export class RepoProvisioner {
       await fsp.rm(dir, { recursive: true, force: true });
     } catch (err) {
       this.logger.warn({ err, dir }, "failed to remove staging dir");
+    }
+  }
+
+  /** Refuse a clone when free space under REPOS_ROOT is dangerously low, so a
+   *  large/malicious repo can't fill the host volume. Best-effort: if statfs is
+   *  unsupported the precheck is skipped (the timeout still bounds duration). */
+  private async ensureDiskSpace(): Promise<void> {
+    try {
+      const st = await fsp.statfs(this.reposRoot);
+      const freeBytes = Number(st.bavail) * Number(st.bsize);
+      if (freeBytes > 0 && freeBytes < 500 * 1024 * 1024) {
+        throw new Error("insufficient free disk space under REPOS_ROOT (<500 MB)");
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("insufficient")) throw err;
+      // statfs unsupported / failed — don't block provisioning on the precheck
     }
   }
 
