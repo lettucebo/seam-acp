@@ -11,6 +11,8 @@ export interface StatusPanelInput {
   startedUtc: number;
   repoDisplay: string;
   model: string;
+  /** Current operational mode label (e.g. "Plan" / "Agent" / "Autopilot"). */
+  mode?: string;
   /** Resolved API model id (e.g. "claude-opus-4-8[1m]"), if different from model alias. */
   resolvedModel?: string;
   /** Reasoning effort for this turn, if set. */
@@ -38,6 +40,7 @@ export function renderStatusPanel(
     elapsedSeconds,
     repoDisplay: input.repoDisplay,
     model: input.model,
+    ...(input.mode ? { mode: input.mode } : {}),
     ...(input.resolvedModel ? { resolvedModel: input.resolvedModel } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     action: input.action,
@@ -57,6 +60,8 @@ export class TurnStatus {
   state: TurnState = "Working";
   action = "Starting…";
   model: string;
+  /** Current operational mode label (e.g. "Plan" / "Agent" / "Autopilot"). */
+  mode?: string;
   /** Resolved API model id returned by getUsage (e.g. "claude-opus-4-8[1m]").
    *  Set after the turn completes; cleared on each new TurnStatus instance. */
   resolvedModel?: string;
@@ -84,10 +89,11 @@ export class TurnStatus {
   private thinkingPending = "";
   private static readonly MAX_THINKING = 5;
 
-  constructor(opts: { model: string; repoDisplay: string; effort?: string }) {
+  constructor(opts: { model: string; repoDisplay: string; effort?: string; mode?: string }) {
     this.model = opts.model;
     this.repoDisplay = opts.repoDisplay;
     if (opts.effort) this.effort = opts.effort;
+    if (opts.mode) this.mode = opts.mode;
     this.startedUtc = Date.now();
   }
 
@@ -101,6 +107,10 @@ export class TurnStatus {
 
   setModel(model: string): void {
     this.model = model;
+  }
+
+  setMode(mode: string | undefined): void {
+    this.mode = mode;
   }
 
   setRepo(repoDisplay: string): void {
@@ -176,6 +186,7 @@ export class TurnStatus {
       startedUtc: this.startedUtc,
       repoDisplay: this.repoDisplay,
       model: this.model,
+      ...(this.mode ? { mode: this.mode } : {}),
       ...(this.resolvedModel ? { resolvedModel: this.resolvedModel } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
       action: this.action,

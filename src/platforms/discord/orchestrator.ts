@@ -338,6 +338,7 @@ export class Orchestrator {
     const status = new TurnStatus({
       model: cfg.model ?? this.config.DEFAULT_MODEL,
       repoDisplay,
+      mode: this.friendlyModeLabel(cfg.mode) ?? "Agent",
       ...(cfg.reasoningEffort ? { effort: cfg.reasoningEffort } : {}),
     });
 
@@ -832,6 +833,10 @@ export class Orchestrator {
             return;
           case "model-changed":
             status.setModel(event.modelId);
+            await refresh();
+            return;
+          case "mode-changed":
+            status.setMode(this.friendlyModeLabel(event.modeId) ?? "Agent");
             await refresh();
             return;
           case "agent-file": {
@@ -3066,6 +3071,17 @@ export class Orchestrator {
       });
       return;
     }
+  }
+
+  /** Map an ACP mode id or stored mode string to a short display label. */
+  private friendlyModeLabel(mode?: string): string | undefined {
+    if (!mode) return undefined;
+    const m = mode.toLowerCase();
+    if (m.includes("autopilot")) return "Autopilot";
+    if (m.includes("plan")) return "Plan";
+    if (m.includes("agent")) return "Agent";
+    const seg = (mode.split("#").pop() ?? mode).trim();
+    return seg ? seg.charAt(0).toUpperCase() + seg.slice(1) : undefined;
   }
 
   private async cmdMode(i: ChatInputCommandInteraction): Promise<void> {

@@ -89,6 +89,9 @@ export const discordRenderer: Renderer = {
         : trim(state.model, 40);
     const fields: StructuredPanel["fields"] = [
       { name: "Repo", value: trim(state.repoDisplay, 80), inline: true },
+      ...(state.mode
+        ? [{ name: "Mode", value: trim(state.mode, 40), inline: true }]
+        : []),
       { name: "Model", value: modelValue, inline: true },
       { name: "Action", value: trim(state.action, 220), inline: true },
     ];
