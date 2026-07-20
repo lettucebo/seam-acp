@@ -77,3 +77,44 @@ export function chunkMarkdownForDiscord(text: string, maxLen = 1900): string[] {
   }
   return out;
 }
+
+/**
+ * Copilot's writing-plans skill often wraps a "draft to paste" in an outer
+ * ```markdown … ``` fence that itself contains ```powershell / ``` blocks.
+ * Discord (and CommonMark) match fences by equal backtick count, so the inner
+ * fences prematurely close the outer one and the whole block renders scrambled.
+ *
+ * This unwraps any fenced block whose info string is `markdown`/`md` — removing
+ * just that block's opening and closing fence lines and keeping its inner
+ * content — so the inner markdown (headers, links, ```powershell code blocks)
+ * renders natively. Matching is done with a stack using the CommonMark rule
+ * that a closing fence has no info string, which correctly pairs nested fences
+ * even when they all use three backticks.
+ */
+export function unwrapMarkdownCodeFences(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const fenceRe = /^(\s*)(`{3,})(.*)$/;
+  const stack: Array<{ index: number; lang: string }> = [];
+  const remove = new Set<number>();
+  for (let i = 0; i < lines.length; i++) {
+    const m = fenceRe.exec(lines[i]!);
+    if (!m) continue;
+    const info = m[3]!.trim();
+    if (info) {
+      // Fence with an info string = opening fence.
+      stack.push({ index: i, lang: info.toLowerCase() });
+    } else if (stack.length > 0) {
+      // Bare fence with an open block = closing fence.
+      const open = stack.pop()!;
+      if (open.lang === "markdown" || open.lang === "md") {
+        remove.add(open.index);
+        remove.add(i);
+      }
+    } else {
+      // Bare fence with nothing open = treat as an opening fence.
+      stack.push({ index: i, lang: "" });
+    }
+  }
+  if (remove.size === 0) return text;
+  return lines.filter((_, i) => !remove.has(i)).join("\n");
+}

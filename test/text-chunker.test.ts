@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkForDiscord, chunkMarkdownForDiscord } from "../src/core/text-chunker.js";
+import { chunkForDiscord, chunkMarkdownForDiscord, unwrapMarkdownCodeFences } from "../src/core/text-chunker.js";
 
 describe("chunkForDiscord", () => {
   it("returns empty for empty input", () => {
@@ -76,5 +76,45 @@ describe("chunkMarkdownForDiscord", () => {
     }
     // A mid-fence chunk reopens with the original language tag.
     expect(chunks.some((c) => c.includes("```ts"))).toBe(true);
+  });
+});
+
+describe("unwrapMarkdownCodeFences", () => {
+  it("leaves content without a markdown wrapper unchanged", () => {
+    const t = "# Hi\n```powershell\naz login\n```\ndone";
+    expect(unwrapMarkdownCodeFences(t)).toBe(t);
+  });
+
+  it("unwraps an outer ```markdown block containing nested ```powershell blocks", () => {
+    const t = [
+      "## 草稿",
+      "```markdown",
+      "## 安裝與啟動",
+      "### 2. 登入",
+      "```powershell",
+      "az login",
+      "```",
+      "### 3. 檢查",
+      "```powershell",
+      "terraform plan",
+      "```",
+      "```",
+      "## Todo",
+    ].join("\n");
+    const out = unwrapMarkdownCodeFences(t);
+    const lines = out.split("\n");
+    // The outer ```markdown wrapper and its matching closer are removed…
+    expect(out).not.toContain("```markdown");
+    // …but the two inner powershell fences survive (4 fence lines remain).
+    expect(lines.filter((l) => /^```/.test(l)).length).toBe(4);
+    // Every remaining fence is balanced (even count).
+    expect(lines.filter((l) => /^```/.test(l)).length % 2).toBe(0);
+    expect(out).toContain("## 安裝與啟動");
+    expect(out).toContain("## Todo");
+  });
+
+  it("does not remove an unmatched (unclosed) markdown fence", () => {
+    const t = "```markdown\n## still open";
+    expect(unwrapMarkdownCodeFences(t)).toBe(t);
   });
 });

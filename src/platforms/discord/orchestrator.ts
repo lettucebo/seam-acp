@@ -18,7 +18,7 @@ import type { Logger } from "../../lib/logger.js";
 import type { Config } from "../../config.js";
 import type { Renderer } from "../renderer.js";
 import { serializePanelText } from "../renderer.js";
-import { chunkMarkdownForDiscord } from "../../core/text-chunker.js";
+import { chunkMarkdownForDiscord, unwrapMarkdownCodeFences } from "../../core/text-chunker.js";
 import type {
   ChatAdapter,
   ChannelRef,
@@ -3002,9 +3002,12 @@ export class Orchestrator {
       return;
     }
     // Text mode (or no sendFile): print the full plan inline as normal messages
-    // (Discord renders the markdown), split fence-aware so code blocks stay valid.
+    // (Discord renders the markdown). Unwrap any outer ```markdown wrapper so
+    // nested ```powershell blocks render correctly, then split fence-aware so
+    // code blocks stay valid across message boundaries.
     const header = "📋 完整執行計畫（plan.md）：";
-    for (const chunk of chunkMarkdownForDiscord(`${header}\n${content}`, 1900)) {
+    const rendered = unwrapMarkdownCodeFences(content);
+    for (const chunk of chunkMarkdownForDiscord(`${header}\n${rendered}`, 1900)) {
       await this.adapter.sendMessage(channel, chunk);
     }
   }
