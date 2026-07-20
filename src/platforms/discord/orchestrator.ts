@@ -1088,9 +1088,15 @@ export class Orchestrator {
           ? modeId.endsWith("#plan")
           : (this.store.readConfig(record).mode ?? "").toLowerCase().includes("plan");
         if (result !== "timeout" && inPlan) {
-          await this.postPlanDetail(channel, record).catch((err) =>
-            this.logger.warn({ err, session: record.id }, "post plan.md detail failed")
-          );
+          // Approach 2 (PLAN_FULL_AUTO): auto-post the full plan.md file card.
+          // Approach 1 (default): the full plan is available on-demand via the
+          // "顯示完整執行計畫" option inside offerPlanProceed. Short plan checklist
+          // is shown by default in both cases.
+          if (this.config.PLAN_FULL_AUTO) {
+            await this.postPlanDetail(channel, record).catch((err) =>
+              this.logger.warn({ err, session: record.id }, "auto post plan.md failed")
+            );
+          }
           void this.offerPlanProceed(channel, record).catch((err) =>
             this.logger.warn({ err, session: record.id }, "plan-proceed picker failed")
           );
@@ -2951,68 +2957,54 @@ export class Orchestrator {
     }
   }
 
-  /** Per-session copy of the last plan.md we posted, to avoid reposting it. */
-  private readonly lastPlanDetail = new Map<string, string>();
-
   /**
-   * After a plan-mode turn, post the FULL plan the writing-plans skill wrote to
-   * Copilot's session-state `plan.md`. Rendered collapsed-by-default: as a
-   * Discord spoiler when it fits (blurred until clicked), else attached as a
-   * file (also hidden until opened). Copilot only summarizes the plan in chat,
-   * so this surfaces the complete detail the operator asked for.
+   * Post the FULL plan the writing-plans skill wrote to Copilot's session-state
+   * `plan.md`, on demand (via the "show full plan" picker option). Delivered as
+   * an attached plan.md file — Discord's file card is the real expand/collapse
+   * (spoilers only blur/reveal, which the operator didn't want). Copilot only
+   * summarizes the plan in chat, so this surfaces the complete detail.
    */
   private async postPlanDetail(channel: ChannelRef, record: SessionRecord): Promise<void> {
-    if (!record.acpSessionId) return;
-    const profile = this.router.getProfile(record.agentId);
-    const home =
-      profile?.configDir ||
-      process.env.COPILOT_HOME ||
-      path.join(os.homedir(), ".copilot");
-    const planPath = path.join(home, "session-state", record.acpSessionId, "plan.md");
-    let content: string;
-    try {
-      content = (await fsp.readFile(planPath, "utf8")).trim();
-    } catch {
-      return; // no plan.md for this session — nothing to surface
+    let content = "";
+    if (record.acpSessionId) {
+      const profile = this.router.getProfile(record.agentId);
+      const home =
+        profile?.configDir ||
+        process.env.COPILOT_HOME ||
+        path.join(os.homedir(), ".copilot");
+      const planPath = path.join(home, "session-state", record.acpSessionId, "plan.md");
+      try {
+        content = (await fsp.readFile(planPath, "utf8")).trim();
+      } catch {
+        content = "";
+      }
     }
-    if (!content) return;
-    if (this.lastPlanDetail.get(record.id) === content) return; // unchanged since last post
-    this.lastPlanDetail.set(record.id, content);
-
-    const header = "📋 **完整計畫**（plan.md）— 點擊展開";
-    // Discord spoilers hide content until clicked = collapsed by default.
-    // Neutralize any `||` in the content so it can't close the spoiler early.
-    const safe = content.replace(/\|\|/g, "\u200b|\u200b|");
-    const spoiler = `${header}\n||\n${safe}\n||`;
-    if (spoiler.length <= 1900) {
-      await this.adapter.sendMessage(channel, spoiler);
+    if (!content) {
+      await this.adapter.sendMessage(
+        channel,
+        "（找不到完整計畫檔 plan.md — 這個 session 可能還沒產生詳細計畫。）"
+      );
       return;
     }
-    // Too long for one message: attach the full plan as a file (still collapsed —
-    // shown as a card the operator clicks to open).
     if (this.adapter.sendFile) {
-      await this.adapter
-        .sendMessage(channel, `${header}（內容較長，附為檔案）`)
-        .catch(() => {});
       await this.adapter.sendFile(channel, {
         data: Buffer.from(content, "utf8"),
         filename: "plan.md",
         mimeType: "text/markdown",
       });
-      return;
-    }
-    // Last resort (no sendFile): chunk into multiple spoiler messages.
-    await this.adapter.sendMessage(channel, header);
-    for (let i = 0; i < safe.length; i += 1800) {
-      await this.adapter.sendMessage(channel, `||\n${safe.slice(i, i + 1800)}\n||`);
+    } else {
+      for (let i = 0; i < content.length; i += 1800) {
+        await this.adapter.sendMessage(channel, content.slice(i, i + 1800));
+      }
     }
   }
 
   /**
    * After a Plan-mode turn ends, offer the operator a picker to proceed:
-   * switch to Autopilot / Agent (and kick off execution) or keep planning.
-   * Copilot's native "approve plan & switch mode" prompt is not emitted over
-   * ACP, so this recreates it on Discord.
+   * show the full plan, switch to Autopilot / Agent (and kick off execution),
+   * or keep planning. Copilot's native "approve plan & switch mode" prompt is
+   * not emitted over ACP, so this recreates it on Discord. Loops so "show full
+   * plan" can be chosen without ending the flow.
    */
   private async offerPlanProceed(
     channel: ChannelRef,
@@ -3020,36 +3012,46 @@ export class Orchestrator {
   ): Promise<void> {
     const sendPicker = this.adapter.sendChoicePicker?.bind(this.adapter);
     if (!sendPicker) return;
-    const picked = await sendPicker(channel, {
-      prompt: "📋 計畫已完成。接下來要怎麼進行？",
-      choices: [
-        { value: "autopilot", label: "🚀 切 Autopilot 執行" },
-        { value: "agent", label: "🤖 用 Agent 逐步執行" },
-        { value: "keep", label: "✋ 保持 Plan（我要補充）" },
-      ],
-      authorizedUserIds: this.config.DISCORD_ALLOWED_USER_IDS,
-    });
-    if (!picked || picked.value === "keep") return;
-    const targetMode = picked.value; // "autopilot" | "agent"
-    const cfg = this.store.readConfig(record);
-    cfg.mode = targetMode;
-    this.persistConfig(record, cfg);
-    try {
-      const rt = await this.router.getOrStartRuntime(record);
-      await rt.applyMode(targetMode);
-    } catch (err) {
-      this.logger.warn({ err, session: record.id }, "plan-proceed: applyMode failed");
+    for (let i = 0; i < 20; i++) {
+      const picked = await sendPicker(channel, {
+        prompt: "📋 計畫已完成。接下來要怎麼進行？",
+        choices: [
+          { value: "showplan", label: "📖 顯示完整執行計畫" },
+          { value: "autopilot", label: "🚀 切 Autopilot 執行" },
+          { value: "agent", label: "🤖 用 Agent 逐步執行" },
+          { value: "keep", label: "✋ 保持 Plan（我要補充）" },
+        ],
+        authorizedUserIds: this.config.DISCORD_ALLOWED_USER_IDS,
+      });
+      if (!picked || picked.value === "keep") return;
+      if (picked.value === "showplan") {
+        await this.postPlanDetail(channel, record).catch((err) =>
+          this.logger.warn({ err, session: record.id }, "show full plan failed")
+        );
+        continue; // re-offer the picker so they can still choose how to proceed
+      }
+      const targetMode = picked.value; // "autopilot" | "agent"
+      const cfg = this.store.readConfig(record);
+      cfg.mode = targetMode;
+      this.persistConfig(record, cfg);
+      try {
+        const rt = await this.router.getOrStartRuntime(record);
+        await rt.applyMode(targetMode);
+      } catch (err) {
+        this.logger.warn({ err, session: record.id }, "plan-proceed: applyMode failed");
+      }
+      const proceedText =
+        targetMode === "autopilot"
+          ? "請依剛才規劃好的計畫開始執行，直到完成。"
+          : "請開始逐步執行剛才規劃好的計畫。";
+      void this.handleIncomingMessage({
+        channel,
+        authorId: picked.userId,
+        authorIsBot: false,
+        text: proceedText,
+      });
+      return;
     }
-    const proceedText =
-      targetMode === "autopilot"
-        ? "請依剛才規劃好的計畫開始執行，直到完成。"
-        : "請開始逐步執行剛才規劃好的計畫。";
-    void this.handleIncomingMessage({
-      channel,
-      authorId: picked.userId,
-      authorIsBot: false,
-      text: proceedText,
-    });
   }
 
   private async cmdMode(i: ChatInputCommandInteraction): Promise<void> {

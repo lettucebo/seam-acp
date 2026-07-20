@@ -485,6 +485,18 @@ const Schema = z.object({
     .transform((v) => v === "true"),
 
   /**
+   * Plan-mode full-plan delivery. When "true", after every plan-mode turn the
+   * bot auto-posts the complete plan.md as a Discord file card (Approach 2 —
+   * always visible, real expand/collapse). When "false" (default), the full
+   * plan is only posted on demand via the "📖 顯示完整執行計畫" picker option
+   * (Approach 1). The short plan checklist is shown by default either way.
+   */
+  PLAN_FULL_AUTO: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
+  /**
    * Optional Discord channel/thread id where bot lifecycle notifications
    * (startup, restart pending) are posted. When unset, no notifications are
    * sent.
