@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
   isWithinRoot,
   normalizeFullPath,
   resolveRepoPath,
+  resolveRepoWithinRoot,
 } from "../src/core/path-utils.js";
 
 const tmp = os.tmpdir();
@@ -63,5 +65,47 @@ describe("resolveRepoPath", () => {
 
   it("throws on empty input", () => {
     expect(() => resolveRepoPath(tmp, "")).toThrow();
+  });
+});
+
+describe("resolveRepoWithinRoot", () => {
+  let root: string;
+
+  beforeAll(() => {
+    // Real dir tree so realpath/statSync work. Use realpath of mkdtemp base
+    // because macOS/Windows temp dirs are themselves symlinks/8.3 names.
+    root = fs.realpathSync.native(fs.mkdtempSync(path.join(tmp, "seam-root-")));
+    fs.mkdirSync(path.join(root, "myrepo"));
+    fs.writeFileSync(path.join(root, "afile.txt"), "x");
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("resolves an existing directory under root to its realpath", () => {
+    const out = resolveRepoWithinRoot(root, "myrepo");
+    expect(out).toBe(path.join(root, "myrepo"));
+  });
+
+  it("throws when the path does not exist", () => {
+    expect(() => resolveRepoWithinRoot(root, "nope")).toThrow(/does not exist/i);
+  });
+
+  it("throws when the target is a file, not a directory", () => {
+    expect(() => resolveRepoWithinRoot(root, "afile.txt")).toThrow(/not a directory/i);
+  });
+
+  it("throws for an absolute path outside root (the existing vuln)", () => {
+    const outside = fs.realpathSync.native(fs.mkdtempSync(path.join(tmp, "seam-outside-")));
+    try {
+      expect(() => resolveRepoWithinRoot(root, outside)).toThrow(/outside REPOS_ROOT/i);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("throws for a .. traversal escape", () => {
+    expect(() => resolveRepoWithinRoot(root, path.join("..", "..", "Windows"))).toThrow();
   });
 });

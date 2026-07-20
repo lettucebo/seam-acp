@@ -590,6 +590,25 @@ export class DiscordAdapter implements ChatAdapter {
       });
       return;
     }
+    // Mirror handleMessage: slash commands were previously exempt from the
+    // channel allowlist. Enforce it here (thread -> check its parent channel;
+    // top-level channel -> check itself). Unset allowlist = all allowed.
+    const allowedChannels = this.config.DISCORD_ALLOWED_CHANNEL_IDS;
+    if (allowedChannels) {
+      const ch = interaction.channel;
+      const parentId =
+        ch && "parentId" in ch && typeof ch.parentId === "string"
+          ? ch.parentId
+          : undefined;
+      const effectiveId = parentId ?? interaction.channelId ?? undefined;
+      if (!effectiveId || !allowedChannels.has(effectiveId)) {
+        await interaction.reply({
+          content: "This channel isn't enabled for seam.",
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    }
     await this.slashHandler(interaction);
   }
 

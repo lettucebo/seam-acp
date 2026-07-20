@@ -71,7 +71,7 @@ const SCHEDULE_PRESETS: Array<{ label: string; value: string }> = [
 import type { SessionStore } from "../../core/session-store.js";
 import { SessionRouter } from "../../core/session-router.js";
 import { TurnStatus, renderStatusPanel } from "../../core/status-panel.js";
-import { isWithinRoot, resolveRepoPath } from "../../core/path-utils.js";
+import { isWithinRoot, resolveRepoPath, resolveRepoWithinRoot } from "../../core/path-utils.js";
 import { ATTACH_FENCE_LANG, withHarnessPreamble } from "../../core/agent-conventions.js";
 import { isModelInlineableAttachment } from "../../agents/attachments.js";
 import { stageAttachment, sweepStagedAttachments } from "../../agents/attachment-staging.js";
@@ -2781,25 +2781,46 @@ export class Orchestrator {
   }
 
   private async cmdRepo(i: ChatInputCommandInteraction): Promise<void> {
-    const channel = this.channelRefFromInteraction(i);
-    if (!channel) {
+    const requested = i.options.getString("path", true);
+    const target = await this.bindRepo(i, requested);
+    if (!target) return; // bindRepo already replied with the failure reason
+    await i.reply({
+      content: `Repo set to \`${this.repoDisplay(target)}\`. Next message starts a fresh session.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  /**
+   * Shared repo-binding gate for every provisioning path (typed `set`, picker,
+   * clone, new). Enforces: thread-only, OS-realpath boundary inside REPOS_ROOT,
+   * and existing directory. On success it binds this thread's session to
+   * `target` and starts a FRESH conversation at the new cwd (clears the old ACP
+   * session so the agent does not resume the previous repo's context). Returns
+   * the bound canonical path, or null after replying with the failure reason.
+   */
+  private async bindRepo(
+    i: ChatInputCommandInteraction,
+    requestedPath: string
+  ): Promise<string | null> {
+    const ch = i.channel;
+    if (!ch || !ch.isThread()) {
       await i.reply({
-        content: "Use `/seam repo` from inside a thread.",
+        content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
         flags: MessageFlags.Ephemeral,
       });
-      return;
+      return null;
     }
-    const requested = i.options.getString("path", true);
-    let resolved: string;
+    let target: string;
     try {
-      resolved = resolveRepoPath(this.config.REPOS_ROOT, requested);
+      target = resolveRepoWithinRoot(this.config.REPOS_ROOT, requestedPath);
     } catch (err) {
       await i.reply({
-        content: `Invalid path: ${(err as Error).message}`,
+        content: `❌ ${(err as Error).message}`,
         flags: MessageFlags.Ephemeral,
       });
-      return;
+      return null;
     }
+    const channel = this.channelRefFromInteraction(i)!;
     const record = this.router.ensureSessionRecord({
       platform: channel.platform,
       channelRef: channel.id,
@@ -2808,15 +2829,12 @@ export class Orchestrator {
     });
     this.store.upsert({
       ...record,
-      repoPath: resolved,
+      repoPath: target,
       updatedUtc: new Date().toISOString(),
     });
-    // Force a fresh runtime against the new cwd.
-    await this.router.invalidate(record.id);
-    await i.reply({
-      content: `Repo set to \`${this.repoDisplay(resolved)}\`. Next message starts a fresh session.`,
-      flags: MessageFlags.Ephemeral,
-    });
+    // Fresh runtime + fresh ACP conversation against the new cwd.
+    await this.router.beginNewConversationAtCwd(record.id);
+    return target;
   }
 
   private async cmdModel(i: ChatInputCommandInteraction): Promise<void> {
@@ -5998,7 +6016,7 @@ export class Orchestrator {
       repoPath: picked,
       updatedUtc: new Date().toISOString(),
     });
-    await this.router.invalidate(record.id);
+    await this.router.beginNewConversationAtCwd(record.id);
 
     if (this.config.NEW_THREAD_WIZARD === "full") {
       await this.adapter.sendMessage(

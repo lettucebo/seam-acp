@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 /** Resolve to an absolute, normalized path. Strips surrounding quotes. */
@@ -35,4 +36,38 @@ export function resolveRepoPath(reposRoot: string, userInput: string): string {
     ? input
     : path.join(reposRoot, input);
   return normalizeFullPath(combined);
+}
+
+/**
+ * Resolve user input to an existing directory strictly inside `reposRoot`,
+ * using the OS realpath on BOTH sides so symlinks/junctions cannot escape the
+ * root (a plain string prefix check does not catch a junction inside the root
+ * that points elsewhere). Throws a user-facing Error on any violation.
+ *
+ * This is the single boundary gate every repo-binding path (typed `set`,
+ * picker, clone, new) must go through. `resolveRepoPath` alone is NOT safe:
+ * it lets absolute paths and `..` escapes through by design.
+ */
+export function resolveRepoWithinRoot(reposRoot: string, userInput: string): string {
+  const candidate = resolveRepoPath(reposRoot, userInput);
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync.native(reposRoot);
+  } catch {
+    throw new Error(`REPOS_ROOT is not accessible: ${reposRoot}`);
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(candidate);
+  } catch {
+    throw new Error(`Path does not exist: ${candidate}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Not a directory: ${candidate}`);
+  }
+  const realTarget = fs.realpathSync.native(candidate);
+  if (!isWithinRoot(realTarget, realRoot)) {
+    throw new Error(`Path is outside REPOS_ROOT: ${candidate}`);
+  }
+  return realTarget;
 }

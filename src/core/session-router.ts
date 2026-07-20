@@ -193,6 +193,29 @@ export class SessionRouter {
     }
   }
 
+  /**
+   * Dispose the cached runtime AND unconditionally clear the stored ACP session
+   * id so the next turn starts a genuinely fresh conversation at the (possibly
+   * new) cwd. Unlike `invalidate({clearAcpSession:true})` this does NOT preserve
+   * agy's durable cascade key: an explicit repo/context switch must not resume
+   * the previous conversation against a different working directory.
+   */
+  async beginNewConversationAtCwd(sessionId: string): Promise<void> {
+    await this.invalidate(sessionId);
+    const record = this.store.get(sessionId);
+    if (record?.acpSessionId) {
+      this.store.upsert({
+        ...record,
+        acpSessionId: "",
+        updatedUtc: new Date().toISOString(),
+      });
+      this.logger.info(
+        { sessionId },
+        "cleared acp session id for a fresh conversation at new cwd"
+      );
+    }
+  }
+
   /** Cleanly abort the active turn for a session without terminating the agent process. */
   /** Abort the active turn for a session. Graceful by default (ACP cancel only,
    *  which a healthy turn honors). With `force`, escalate: if the turn is still
