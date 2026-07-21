@@ -1,0 +1,12 @@
+# Keep POSIX shell scripts LF even when authored/checked out on Windows —
+# a CRLF shebang line ("#!/usr/bin/env bash\r") makes the script unrunnable.
+*.sh text eol=lf
+run-bot.sh text eol=lf
+stop-bot.sh text eol=lf
+install.sh text eol=lf
+
+# Node ESM installer helpers are cross-platform; keep them LF too.
+*.mjs text eol=lf
+
+# PowerShell is Windows-side; CRLF is fine.
+*.ps1 text eol=crlf

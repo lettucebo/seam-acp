@@ -56,7 +56,7 @@ Copy `.env.example` to `.env` and fill it in.
 | `DEFAULT_PERMISSION_POLICY` | no | `ask` (recommended). Bot-wide default policy for new sessions. One of `always` (auto-approve), `ask` (prompt me on Discord), `deny` (auto-deny). Override per-session with `/seam approve`. |
 | `DEFAULT_AUTO_APPROVE` | no | *Deprecated.* When `true`, forces the bot-wide default to `always`. Prefer `DEFAULT_PERMISSION_POLICY`. |
 
-You also need the GitHub Copilot CLI installed locally (`brew install github/gh/copilot` or `npm i -g @github/copilot`) and authenticated (`copilot auth login`). The Docker image installs and runs the CLI for you, but you still need to mount auth state or sign in inside the container.
+You also need the GitHub Copilot CLI installed locally (`npm i -g @github/copilot`, or `winget install GitHub.Copilot` on Windows / `brew install copilot-cli` on macOS) and authenticated (`copilot login`). The Docker image installs and runs the CLI for you, but you still need to mount auth state or sign in inside the container.
 
 To use the **Anthropic Claude** profile, install the ACP adapter (and the underlying CLI for auth):
 
@@ -66,6 +66,25 @@ claude /login
 ```
 
 To use the **Google Antigravity (agy)** profile, install the Antigravity CLI binary from [github.com/google-antigravity/antigravity-cli](https://github.com/google-antigravity/antigravity-cli/releases) and run `agy /auth`. Each agent profile is independent — install only the ones you'll use.
+
+## Quick install (guided)
+
+The guided installer checks/installs prerequisites (Node ≥ 22, git, gh, the
+Copilot CLI), collects your config into `.env`, builds, and can set up 24/7
+residency. Run it from inside the cloned repo:
+
+```sh
+# macOS / Linux
+./install.sh
+
+# Windows (from a normal, non-admin PowerShell)
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Useful flags (both installers): `--yes`/`-Yes` (non-interactive, keep
+existing/defaults), `--residency`/`-Residency` or `--no-residency`/`-NoResidency`,
+`--dry-run`/`-DryRun`, `--skip-auth`/`-SkipAuth`. See [INSTALL.md](INSTALL.md) for
+the full walkthrough, residency details, and uninstall.
 
 ## Run (local dev)
 

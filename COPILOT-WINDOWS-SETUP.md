@@ -28,7 +28,7 @@ Discord(手機/桌面) ──gateway──> seam-acp(Node) ──ACP stdio──
 
 1. **付費 Copilot 訂閱**（Pro / Pro+ / Business / Enterprise）。**Free 版不支援 CLI/ACP**。Business/Enterprise 需管理者於 Policies 啟用 Copilot CLI。
 2. **Copilot CLI 已登入**：`copilot`（本機為 WinGet 的 `copilot.exe`），執行過 `copilot login`。
-3. **Node 18+**（本機為 Node 26，OK）。
+3. **Node 22+**（本機為 Node 26，OK）。
 4. **Discord bot**（見下）。
 
 ## 建立 Discord Bot（只有你能做）
