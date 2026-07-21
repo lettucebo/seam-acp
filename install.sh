@@ -195,8 +195,8 @@ setup_launchd() {
 EOF
   plutil -lint "$plist" >/dev/null || die "generated plist failed plutil -lint"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  launchctl enable "gui/$(id -u)/$label" 2>/dev/null || true  # undo a prior --disable BEFORE loading
   launchctl bootstrap "gui/$(id -u)" "$plist" || die "launchctl bootstrap failed (check: launchctl print gui/$(id -u)/$label)"
-  launchctl enable "gui/$(id -u)/$label" 2>/dev/null || true  # undo a prior stop-bot.sh --disable
   ok "launchd agent loaded: $label"
   warn "macOS LaunchAgents run only AFTER you log in (not pre-login/headless)."
 }
@@ -210,7 +210,11 @@ setup_systemd() {
   local unit="$unit_dir/seam-acp-bot.service"
   local node_bin; node_bin="$(command -v node || echo /usr/bin/node)"
   mkdir -p "$unit_dir" "$SCRIPT_DIR/data"
-  # Quote ExecStart/Environment so paths with spaces don't get split by systemd.
+  # Escape '%' (a systemd specifier prefix) and quote ExecStart/Environment so
+  # paths with spaces don't get split by systemd.
+  local sd_dir sd_node
+  sd_dir="$(printf '%s' "$SCRIPT_DIR" | sed 's/%/%%/g')"
+  sd_node="$(printf '%s' "$node_bin" | sed 's/%/%%/g')"
   cat > "$unit" <<EOF
 [Unit]
 Description=seam-acp Discord bot
@@ -219,13 +223,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$SCRIPT_DIR
-Environment="NODE_BIN=$node_bin"
-ExecStart="$SCRIPT_DIR/run-bot.sh"
+WorkingDirectory=$sd_dir
+Environment="NODE_BIN=$sd_node"
+ExecStart="$sd_dir/run-bot.sh"
 Restart=always
 RestartSec=5
-StandardOutput=append:$SCRIPT_DIR/data/bot.log
-StandardError=append:$SCRIPT_DIR/data/bot.log
+StandardOutput=append:$sd_dir/data/bot.log
+StandardError=append:$sd_dir/data/bot.log
 
 [Install]
 WantedBy=default.target
@@ -293,6 +297,9 @@ if [ "$DRY" != 1 ]; then
   if [ -n "$need" ]; then
     warn "will install:$need"
     warn "(via ${PM:-package manager}; Homebrew/nvm/copilot may run curl|bash or npm -g — see INSTALL.md)"
+    if [ "$YES" != 1 ] && [ ! -t 0 ]; then
+      die "prerequisites need installing but there is no TTY; re-run with --yes to install non-interactively"
+    fi
     confirm "Proceed with installing the above?" 1 || die "aborted by user"
   fi
 fi

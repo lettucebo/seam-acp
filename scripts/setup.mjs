@@ -341,6 +341,9 @@ async function main() {
 
   // Build.
   step("Installing dependencies & building");
+  if (!FLAG.dryRun && !which("npm")) {
+    die("npm not found on PATH (it normally ships with Node) — install/repair Node and re-run");
+  }
   const hasLock = fs.existsSync(path.join(REPO_ROOT, "package-lock.json"));
   const hasModules = fs.existsSync(path.join(REPO_ROOT, "node_modules"));
   // `npm ci` wipes node_modules — deterministic for a FRESH install, but on a

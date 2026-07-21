@@ -78,6 +78,8 @@ describe("serializeValue round-trips through the real dotenv parser", () => {
     ["value starting with a double quote", '"lead'],
     ["value starting with a single quote", "'lead"],
     ["value with middle spaces", "a b c"],
+    ["value with an embedded newline", "alpha\nbeta"],
+    ["value with an embedded tab", "a\tb"],
     ["value containing a hash", "abc#def"],
     ["value with trailing space", "abc "],
     ["value with a single quote", "it's fine"],

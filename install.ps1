@@ -83,9 +83,11 @@ function Install-Tool($Cmd, $WingetId, $ChocoId) {
 
 function Test-CopilotExe {
   # The app spawns copilot WITHOUT a shell, so it needs a real .exe, not npm's
-  # .cmd/.ps1 shim. Return true only if a copilot.exe resolves on PATH.
-  $c = Get-Command copilot -ErrorAction SilentlyContinue
-  return ($c -and $c.Source -and $c.Source.ToLower().EndsWith(".exe"))
+  # .cmd/.ps1 shim. True if ANY copilot on PATH resolves to a .exe.
+  foreach ($c in @(Get-Command copilot -All -ErrorAction SilentlyContinue)) {
+    if ($c.Source -and $c.Source.ToLower().EndsWith(".exe")) { return $true }
+  }
+  return $false
 }
 
 function Install-Copilot {
@@ -175,7 +177,10 @@ if (-not $DryRun) {
   if (-not (Test-CopilotExe)) { $need += "copilot" }
   if ($need.Count -gt 0) {
     Note ("will install: " + ($need -join ", ") + "  (via $PM)")
-    if (-not ($Yes -or [Console]::IsInputRedirected)) {
+    if (-not $Yes -and [Console]::IsInputRedirected) {
+      Die "prerequisites need installing but no interactive console; re-run with -Yes to install non-interactively"
+    }
+    if (-not $Yes) {
       $ans = Read-Host "Proceed with installing the above? (Y/n)"
       if ($ans -match "^(n|no)$") { Die "aborted by user" }
     }

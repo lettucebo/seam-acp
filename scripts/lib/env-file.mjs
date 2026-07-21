@@ -28,7 +28,7 @@ export function serializeValue(value) {
   // also the ONLY safe encoding for Windows backslash paths (dotenv expands
   // \n/\r inside double quotes and can't carry a literal backslash).
   const needsQuote =
-    /^\s|\s$/.test(v) || v.includes("#") || v[0] === '"' || v[0] === "'";
+    /^\s|\s$/.test(v) || /[#\n\r]/.test(v) || v[0] === '"' || v[0] === "'";
   if (!needsQuote) return v;
   if (!v.includes("'")) return `'${v}'`; // single quotes are literal in dotenv
   // Value has a single quote AND needs quoting: fall back to double quotes and
