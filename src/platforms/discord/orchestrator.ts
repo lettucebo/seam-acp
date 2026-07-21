@@ -1442,6 +1442,12 @@ export class Orchestrator {
         );
         return;
       }
+      if (!group && sub === "model" && focused.name === "id") {
+        await interaction.respond(
+          this.modelAutocompleteChoices(interaction, String(focused.value))
+        );
+        return;
+      }
       await interaction.respond([]);
     } catch (err) {
       this.logger.warn({ err }, "repo autocomplete failed");
@@ -1485,6 +1491,81 @@ export class Orchestrator {
       // root, keeping the value well under Discord's 100-char limit.
       return { name: name.slice(0, 100), value: name.slice(0, 100) };
     });
+  }
+
+  /**
+   * Autocomplete for `/… model id`. Sources the catalog without starting a
+   * runtime (3s budget): profile.staticModels (from COPILOT_MODELS etc.) →
+   * the live runtime's advertised models if one is up for this thread → the
+   * last-seen cached catalog for the agent → always includes the current model
+   * and `auto`. Labels show the context window when the agent provides it.
+   */
+  private modelAutocompleteChoices(
+    interaction: AutocompleteInteraction,
+    query: string
+  ): { name: string; value: string }[] {
+    const channelId = interaction.channelId ?? undefined;
+    const record = channelId ? this.store.getByChannel(PLATFORM, channelId) : null;
+    const agentId = record?.agentId ?? this.config.DEFAULT_AGENT;
+    const current =
+      (record ? this.store.readConfig(record).model : undefined) ??
+      this.config.DEFAULT_MODEL;
+    const profile = this.router.getProfile(agentId);
+
+    type M = { modelId: string; name?: string; contextLimit?: number };
+    let source: ReadonlyArray<M> = [];
+    if (profile?.staticModels && profile.staticModels.length > 0) {
+      source = profile.staticModels;
+    } else if (record && this.router.getLiveModels(record.id)?.length) {
+      source = this.router.getLiveModels(record.id)!;
+    } else {
+      source = this.router.getSeenModels(agentId) ?? [];
+    }
+
+    // Merge: current model + auto always present, then the catalog; dedupe by id.
+    const merged: M[] = [];
+    const seen = new Set<string>();
+    for (const m of [{ modelId: current }, { modelId: "auto", name: "auto" }, ...source]) {
+      const id = m.modelId;
+      if (!id || seen.has(id.toLowerCase())) continue;
+      seen.add(id.toLowerCase());
+      merged.push(m);
+    }
+
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? merged.filter(
+          (m) =>
+            m.modelId.toLowerCase().includes(q) ||
+            (m.name ?? "").toLowerCase().includes(q)
+        )
+      : merged;
+
+    return filtered.slice(0, 25).map((m) => ({
+      name: this.modelChoiceLabel(m).slice(0, 100),
+      value: m.modelId.slice(0, 100),
+    }));
+  }
+
+  /** Human label for a model choice: name (or id), with context window appended
+   *  when known (e.g. "Opus 4.8 • 1M ctx"). */
+  private modelChoiceLabel(m: {
+    modelId: string;
+    name?: string;
+    contextLimit?: number;
+  }): string {
+    const base = m.name && m.name !== m.modelId ? `${m.name} (${m.modelId})` : m.modelId;
+    if (m.contextLimit && m.contextLimit > 0) {
+      return `${base} • ${this.formatContext(m.contextLimit)} ctx`;
+    }
+    return base;
+  }
+
+  /** Format a token count as a compact window size (200000 → "200K", 1000000 → "1M"). */
+  private formatContext(n: number): string {
+    if (n >= 1_000_000) return `${Math.round((n / 1_000_000) * 10) / 10}M`;
+    if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+    return String(n);
   }
 
   private async probeCopilotContext(

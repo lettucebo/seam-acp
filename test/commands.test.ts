@@ -30,6 +30,14 @@ describe("buildSeamCommand", () => {
     expect(pathOpt.autocomplete).toBe(true);
   });
 
+  it("enables autocomplete on `model <id>`", () => {
+    const model = options.find((o) => o.name === "model") as {
+      options?: { name: string; autocomplete?: boolean }[];
+    };
+    const idOpt = (model.options ?? []).find((o) => o.name === "id")!;
+    expect(idOpt.autocomplete).toBe(true);
+  });
+
   it("no longer exposes the old flat repo/repos subcommands", () => {
     const names = options.map((o) => o.name);
     // `repo` now exists as a GROUP (type 2), not a flat subcommand; `repos`

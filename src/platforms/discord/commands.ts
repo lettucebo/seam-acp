@@ -86,7 +86,7 @@ export function buildSeamCommand(
       .setName("model")
       .setDescription("Get or set the agent model for this thread")
       .addStringOption((o) =>
-        o.setName("id").setDescription("Model id").setRequired(false)
+        o.setName("id").setDescription("Model id (type to search)").setRequired(false).setAutocomplete(true)
       )
   );
 

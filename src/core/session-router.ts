@@ -40,6 +40,13 @@ export class SessionRouter {
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly creationLocks = new Map<string, Promise<AgentRuntime>>();
   private readonly lastStartFailure = new Map<string, number>();
+  /** Last-seen advertised model catalog per agent id, cached in memory so the
+   *  `/… model id` autocomplete has options even before a runtime is up for the
+   *  current thread. Populated whenever a runtime advertises models. */
+  private readonly seenModels = new Map<
+    string,
+    ReadonlyArray<{ modelId: string; name?: string; contextLimit?: number }>
+  >();
   private readonly startFailureCooldownMs = 30_000;
 
   constructor(opts: {
@@ -86,6 +93,21 @@ export class SessionRouter {
   /** Look up a registered profile by id, or undefined if not found. */
   getProfile(id: string): AgentProfile | undefined {
     return this.profileById.get(id);
+  }
+
+  /** Models advertised by the live runtime for this session, if one exists
+   *  (never starts a runtime — safe for the 3s autocomplete budget). */
+  getLiveModels(
+    sessionId: string
+  ): ReadonlyArray<{ modelId: string; name?: string; contextLimit?: number }> | undefined {
+    return this.runtimes.get(sessionId)?.getSessionInfo()?.availableModels;
+  }
+
+  /** Last-seen advertised model catalog for an agent id (in-memory cache). */
+  getSeenModels(
+    agentId: string
+  ): ReadonlyArray<{ modelId: string; name?: string; contextLimit?: number }> | undefined {
+    return this.seenModels.get(agentId);
   }
 
   /** Look up or create the SessionRecord for a given chat channel. */
@@ -145,6 +167,10 @@ export class SessionRouter {
         this.runtimes.set(record.id, rt);
         this.creationLocks.delete(record.id);
         this.lastStartFailure.delete(record.id);
+        // Cache the advertised model catalog for this agent so autocomplete has
+        // options across threads / before a runtime exists.
+        const models = rt.getSessionInfo()?.availableModels;
+        if (models && models.length > 0) this.seenModels.set(record.agentId, models);
         return rt;
       },
       (err) => {
