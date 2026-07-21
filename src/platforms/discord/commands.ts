@@ -8,7 +8,11 @@ import {
  * Models are resolved at runtime via the agent's `availableModels`, but for
  * v1 we accept a free-form string with autocomplete in a later phase.
  */
-export function buildSeamCommand(): SlashCommandBuilder {
+export function buildSeamCommand(reposRoot?: string): SlashCommandBuilder {
+  // Slash-command option descriptions are static at registration time, but
+  // REPOS_ROOT is known at startup, so bake the real path in when provided.
+  // (Discord caps option/subcommand descriptions at 100 chars.)
+  const root = reposRoot ?? "REPOS_ROOT";
   const cmd = new SlashCommandBuilder()
     .setName("seam")
     .setDescription("Control the seam-acp agent");
@@ -36,13 +40,13 @@ export function buildSeamCommand(): SlashCommandBuilder {
           .addStringOption((o) =>
             o
               .setName("path")
-              .setDescription("Repo under REPOS_ROOT")
+              .setDescription(`Repo under ${root}`.slice(0, 100))
               .setRequired(true)
               .setAutocomplete(true)
           )
       )
       .addSubcommand((sub) =>
-        sub.setName("list").setDescription("List repos under REPOS_ROOT")
+        sub.setName("list").setDescription(`List repos under ${root}`.slice(0, 100))
       )
       .addSubcommand((sub) =>
         sub

@@ -813,7 +813,7 @@ export class DiscordAdapter implements ChatAdapter {
     const rest = new REST({ version: "10" }).setToken(
       this.config.DISCORD_BOT_TOKEN
     );
-    const body = [buildSeamCommand().toJSON()];
+    const body = [buildSeamCommand(this.config.REPOS_ROOT).toJSON()];
     const guildIds = this.config.DISCORD_DEV_GUILD_ID;
     if (guildIds.length > 0) {
       // Register to each listed guild — instant, and scoped to servers we
