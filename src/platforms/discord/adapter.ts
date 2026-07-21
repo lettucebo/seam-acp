@@ -605,17 +605,10 @@ export class DiscordAdapter implements ChatAdapter {
       });
       return;
     }
-    // Mirror handleMessage: slash commands were previously exempt from the
-    // channel allowlist. Enforce it here (thread -> check its parent channel;
-    // top-level channel -> check itself). Unset allowlist = all allowed.
+    // Mirror handleMessage: enforce the channel allowlist here. Unset = all allowed.
     const allowedChannels = this.config.DISCORD_ALLOWED_CHANNEL_IDS;
     if (allowedChannels) {
-      const ch = interaction.channel;
-      const parentId =
-        ch && "parentId" in ch && typeof ch.parentId === "string"
-          ? ch.parentId
-          : undefined;
-      const effectiveId = parentId ?? interaction.channelId ?? undefined;
+      const effectiveId = this.allowlistChannelId(interaction);
       if (!effectiveId || !allowedChannels.has(effectiveId)) {
         await interaction.reply({
           content: "This channel isn't enabled for seam.",
@@ -625,6 +618,24 @@ export class DiscordAdapter implements ChatAdapter {
       }
     }
     await this.slashHandler(interaction);
+  }
+
+  /**
+   * The channel id to check against DISCORD_ALLOWED_CHANNEL_IDS:
+   *  - in a thread → its PARENT channel (the allowlist lists parent channels);
+   *  - in a normal channel → the channel itself.
+   * A text channel's `parentId` is its CATEGORY, which must NOT be used here —
+   * using it was why `/seam repo set` autocomplete returned nothing when run
+   * directly in an allowed channel that happens to sit under a category.
+   */
+  private allowlistChannelId(
+    interaction: ChatInputCommandInteraction | AutocompleteInteraction
+  ): string | undefined {
+    const ch = interaction.channel;
+    if (ch && "isThread" in ch && typeof ch.isThread === "function" && ch.isThread()) {
+      return ch.parentId ?? undefined;
+    }
+    return interaction.channelId ?? undefined;
   }
 
   private async handleAutocomplete(
@@ -642,12 +653,7 @@ export class DiscordAdapter implements ChatAdapter {
     }
     const allowedChannels = this.config.DISCORD_ALLOWED_CHANNEL_IDS;
     if (allowedChannels) {
-      const ch = interaction.channel;
-      const parentId =
-        ch && "parentId" in ch && typeof ch.parentId === "string"
-          ? ch.parentId
-          : undefined;
-      const effectiveId = parentId ?? interaction.channelId ?? undefined;
+      const effectiveId = this.allowlistChannelId(interaction);
       if (!effectiveId || !allowedChannels.has(effectiveId)) {
         await interaction.respond([]);
         return;
