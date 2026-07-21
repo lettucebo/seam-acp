@@ -227,6 +227,14 @@ export class Orchestrator {
 
   private async handleRestartSentinel(): Promise<void> {
     this.restartPending = true;
+    // Total restart watchdog: force exit if ANY step below hangs (a Discord API
+    // hang in the notification, an unbounded drain, unlink, or the restart hook),
+    // so the supervisor always relaunches. Unref'd so it never keeps us alive; on
+    // the normal path the process exits via the hook well before it fires.
+    setTimeout(() => {
+      this.logger.error("restart watchdog fired; forcing exit for supervisor relaunch");
+      process.exit(1);
+    }, 60_000).unref();
     // Stop firing NEW scheduled jobs immediately so the drain only waits for
     // jobs already in flight (they're counted in activeTurns). Timers re-arm from
     // the DB after the restart.
