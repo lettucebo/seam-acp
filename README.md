@@ -115,6 +115,8 @@ pm2 stop seam-acp       # stop the bot
 
 All commands are restricted to users listed in `DISCORD_ALLOWED_USER_IDS` and (where it matters) thread-scoped.
 
+> **Command name:** examples below use the default `/seam`. If you set `DISCORD_COMMAND_NAME` (e.g. `copilot`), substitute it everywhere — the command becomes `/copilot new`, `/copilot repo set`, etc. Renaming replaces the command within its registration scope; if you switch between guild-scoped (`DISCORD_DEV_GUILD_ID` set) and global registration, clear the old scope's command so you don't see both names.
+
 | Command | What it does |
 |---|---|
 | `/seam new [name]` | Create a new public thread, bind a session to it, and post the repo picker — all in one step |

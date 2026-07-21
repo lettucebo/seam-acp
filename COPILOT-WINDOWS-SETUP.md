@@ -47,6 +47,7 @@ DISCORD_BOT_TOKEN=你的_bot_token
 DISCORD_ALLOWED_USER_IDS=你的_discord_user_id     # 只有你能操控（重要安全邊界）
 DISCORD_DEV_GUILD_ID=你的_guild_id                # slash 指令即時註冊（否則全域約 1 小時）
 DISCORD_ALLOWED_CHANNEL_IDS=你的頻道_id           # 只在此頻道(及其 thread)回應；擋掉其他 bot 的頻道
+DISCORD_COMMAND_NAME=seam                         # 指令名（/seam）。可改成 copilot / scout 等，不同實例不同名
 
 REPOS_ROOT=C:\Source\Repos                        # 允許 agent 操作的 repo 根目錄（Windows 路徑）
 DATA_DIR=./data

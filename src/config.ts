@@ -69,7 +69,9 @@ const Schema = z.object({
   /**
    * The Discord slash-command name (the "/seam" prefix). Configurable so
    * different bot instances can expose different commands (e.g. /copilot,
-   * /scout). Lowercased; must match Discord's command-name rule.
+   * /scout). Lowercased. We enforce an intentional ASCII subset of Discord's
+   * naming rule (a-z, 0-9, '_' , '-') — Discord also allows Unicode letters and
+   * apostrophes, but the ASCII subset covers the intended use and is simpler.
    */
   DISCORD_COMMAND_NAME: z
     .string()
@@ -77,7 +79,7 @@ const Schema = z.object({
     .transform((v) => v.trim().toLowerCase())
     .refine((v) => /^[a-z0-9_-]{1,32}$/.test(v), {
       message:
-        "DISCORD_COMMAND_NAME must be 1-32 chars of a-z, 0-9, '_' or '-' (Discord slash-command rule)",
+        "DISCORD_COMMAND_NAME must be 1-32 chars of a-z, 0-9, '_' or '-' (an ASCII subset of Discord's command-name rule)",
     }),
 
   REPOS_ROOT: z.string().min(1, "REPOS_ROOT is required"),

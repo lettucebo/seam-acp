@@ -2860,7 +2860,7 @@ export class Orchestrator {
       });
       return;
     }
-    const name = i.options.getString("name") ?? "seam";
+    const name = i.options.getString("name") ?? this.cmd;
     if (!i.channelId) {
       await i.reply({ content: "No channel.", flags: MessageFlags.Ephemeral });
       return;
@@ -6404,12 +6404,12 @@ export class Orchestrator {
     const profile = this.router.getProfile(record.agentId);
     const abbr = profile?.threadAbbr;
     if (!abbr) return;
-    // Only rename if the thread still has the default "seam" name; skip if
-    // the user already gave it a custom name when running /seam new.
+    // Only rename if the thread still has the default (command-name) name; skip
+    // if the user already gave it a custom name when running `/<cmd> new`.
     let current: string | undefined;
     if (this.adapter.getThreadName) {
       current = await this.adapter.getThreadName(channel);
-      if (current !== undefined && current !== "seam") return;
+      if (current !== undefined && current !== this.cmd) return;
     }
     const repoDisplayStr = this.repoDisplay(repoPath);
     const newName = `${repoDisplayStr} ${abbr}`;

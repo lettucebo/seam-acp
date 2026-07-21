@@ -825,8 +825,8 @@ export class DiscordAdapter implements ChatAdapter {
     const guildIds = this.config.DISCORD_DEV_GUILD_ID;
     if (guildIds.length > 0) {
       // Register to each listed guild — instant, and scoped to servers we
-      // explicitly opt in (vs global, which exposes /seam in every server the
-      // bot is in and takes ~1h to propagate).
+      // explicitly opt in (vs global, which exposes the command in every server
+      // the bot is in and takes ~1h to propagate).
       for (const guildId of guildIds) {
         // Per-guild try/catch: a guild the bot hasn't been invited to (or lost
         // access to) returns Missing Access / Unknown Guild. Skip it with a
