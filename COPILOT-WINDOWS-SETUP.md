@@ -96,7 +96,7 @@ npm start          # = node dist/index.js
 
 - **任務**：`seam-acp-bot`（AtLogOn / 使用者 `FAREAST\tzyu` / 互動式 / 免系統管理員）。
 - **啟動器 `run-bot.ps1`**：迴圈跑 `node dist/index.js`，任何退出都自動重啟（capped backoff，穩定執行後 reset），輸出附加到 `data/bot.log`（>10MB 自動滾成 `bot.log.1`）；設 `HOME=%USERPROFILE%`、絕對 node 路徑、`COPILOT_CLI_PATH`。
-- **單一實例守衛**：health port（`HEALTH_PORT`，預設 3000）被佔用時第二個實例會乾淨退出（不會搶登入）。
+- **單一實例守衛**：health port（`HEALTH_PORT`，預設 3000）被佔用時，第二個實例會先探測 `/health` 判斷——若是另一個 seam-acp 就乾淨退出（不搶登入）；若是**無關程式**佔用該埠，會記錄明確訊息並退出（此時請改 `HEALTH_PORT` 到空閒埠，否則 supervisor 會持續重試）。
 - **重啟/部署**：`npm run redeploy`（build → 寫 `data/.restart-pending` → bot 排空後**優雅退出** → 迴圈relaunch 新版）。**勿**直接 kill node / `Stop-ScheduledTask` 來重啟。
 - **停止（少用）**：`.\stop-bot.ps1`（停用任務 + 停 node PID；不以名稱殺 `copilot`）。重新啟用：`Enable-ScheduledTask -TaskName seam-acp-bot; Start-ScheduledTask -TaskName seam-acp-bot`。
 - **狀態/日誌**：`Get-ScheduledTask seam-acp-bot`、`Get-Content .\data\bot.log -Tail 100`、`curl http://localhost:3000/health`。
@@ -120,6 +120,8 @@ npm start          # = node dist/index.js
 - **只支援選項、無 free-text**：`ask_user` 一律要 **2–25 個明確選項**（是非題請用 `["Yes","No"]`）；沒有「自行輸入」欄位。開放式（無固定選項）問題模型會改用純文字提問。
 - **取消時 Discord 選單不會立即消失**：`/seam cancel` 或程式重啟時，已張貼的 `ask_user` 選單會保留到自身逾時才失效（plan「執行方式」選單則刻意永不逾時）。
 - **多 thread 併發寫同一 repo**：請不同 thread 綁不同 repo/worktree，避免 git index 衝突。session 路由本身是隔離的（每 thread 各自 runtime / ask_user token / plan.md / mode）。
+- **`HEALTH_PORT` 埠衝突（單一實例守衛的取捨）**：守衛只保護「同一個埠」。若手動另開一個 `HEALTH_PORT` 不同的實例，兩者會並存；若埠被無關程式長期佔用，supervisor 會以 backoff 持續重試（不是緊繃迴圈，但也起不來）——解法是改 `HEALTH_PORT`。單人使用下不另做具名 mutex。
+- **`bot.log` 只在「重啟之間」滾動**：`run-bot.ps1` 在每次 `node` 退出後才檢查 >10MB 並滾成 `bot.log.1`（node 執行中持有檔案 handle，無法邊寫邊滾）。長期穩定執行、久久不重啟時單一 log 可能偏大——必要時手動滾動或重啟一次。
 
 > 首次測試建議設 `DISCORD_DEV_GUILD_ID`（你的伺服器 ID），slash 指令會即時註冊；否則全域註冊可能要等約一小時才生效。
 

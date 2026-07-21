@@ -85,30 +85,30 @@ docker compose up -d --build
 
 Pass `--build-arg INSTALL_COPILOT_CLI=false` if you want to mount your own Copilot CLI binary.
 
-## Run (PM2 — background process, no Docker)
+## Run (background, 24/7)
 
-PM2 keeps the bot running in the background, restarts it on crashes, and can auto-start it at login.
+On Windows the bot runs under a **Task Scheduler logon task** + a supervisor
+script (`run-bot.ps1`) rather than PM2 — PM2 isn't supported here, and a Windows
+service can't reach the per-user Copilot auth under `~/.copilot`. See
+[COPILOT-WINDOWS-SETUP.md](COPILOT-WINDOWS-SETUP.md) for the full setup
+(registration command, start/stop, logs, limitations).
+
+**After making code changes**, use the redeploy script instead of killing the
+process directly. A hard kill would drop the bot mid-reply if an agent issued the
+command:
 
 ```sh
-npm install -g pm2
-npm run build
-pm2 start ecosystem.config.cjs  # starts the bot as a background daemon
-pm2 save                         # persist the process list
-pm2 startup                      # prints a command — run it to enable auto-start at login
+npm run redeploy   # builds, then signals the running bot to drain turns and
+                   # gracefully restart; the supervisor relaunches the new code
 ```
 
-**After making code changes**, use the dedicated redeploy script instead of restarting PM2 directly. A direct `pm2 restart` would kill the bot mid-reply if an agent issued the command:
+Stop / start:
 
-```sh
-npm run redeploy   # builds, then restarts PM2 after a 3-second delay
-```
-
-Other useful commands:
-
-```sh
-pm2 status              # check if the bot is running
-pm2 logs seam-acp       # tail live logs
-pm2 stop seam-acp       # stop the bot
+```powershell
+.\stop-bot.ps1                                   # disable + stop the task, stop the bot by PID
+Start-ScheduledTask -TaskName seam-acp-bot       # start again (re-enable first if stopped via stop-bot.ps1)
+Get-Content .\data\bot.log -Tail 40 -Wait        # tail live logs
+curl http://localhost:3000/health                # liveness check
 ```
 
 ## Slash commands

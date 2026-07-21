@@ -240,9 +240,17 @@ export class Orchestrator {
       this.logger.info({ activeTurns: this.activeTurns }, "restart pending, draining turns");
 
       await new Promise<void>((resolve) => {
+        const deadline = Date.now() + 30_000;
         const check = setInterval(() => {
           if (this.activeTurns === 0) {
             clearInterval(check);
+            resolve();
+          } else if (Date.now() >= deadline) {
+            clearInterval(check);
+            this.logger.warn(
+              { activeTurns: this.activeTurns },
+              "restart drain deadline reached; proceeding with turns still active"
+            );
             resolve();
           }
         }, 500);
@@ -283,6 +291,15 @@ export class Orchestrator {
   // --- message turn ---
 
   private async handleIncomingMessage(msg: IncomingMessage): Promise<void> {
+    // A restart is draining in-flight turns; don't start a new one (it would
+    // keep activeTurns above zero and stall the drain). Tell the user to retry.
+    if (this.restartPending) {
+      await this.adapter.sendMessage(
+        msg.channel,
+        "♻️ 正在重新啟動，請稍候幾秒後再送出這則訊息。"
+      );
+      return;
+    }
     const channelId = msg.channel.id;
 
     // Bump the generation so any previously-queued (but not-yet-started) tasks

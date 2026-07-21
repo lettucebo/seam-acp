@@ -458,6 +458,15 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ signal }, "shutting down");
+    // Arm the hard-exit failsafe FIRST, before any await below. If a graceful
+    // step hangs (e.g. an ACP runtime that never settles during disposeAll),
+    // this still forces the process down so the supervisor can relaunch. Must be
+    // armed before the awaits, not after them, or a hung await would prevent it.
+    const hardExit = setTimeout(() => {
+      logger.error("graceful shutdown timed out; forcing exit");
+      process.exit(1);
+    }, 15000);
+    hardExit.unref();
     orchestrator.stopSentinelWatcher();
     scheduledManager.stop();
     stopTunnelGist?.();
@@ -486,8 +495,9 @@ async function main(): Promise<void> {
     } catch {
       /* ignore */
     }
+    clearTimeout(hardExit);
     health.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 5000).unref();
+    setTimeout(() => process.exit(0), 3000).unref();
   };
 
   process.on("SIGINT", () => void shutdown("SIGINT"));

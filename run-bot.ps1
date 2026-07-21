@@ -13,16 +13,26 @@
 Set-Location -Path $PSScriptRoot
 $log = Join-Path $PSScriptRoot "data\bot.log"
 $logOld = Join-Path $PSScriptRoot "data\bot.log.1"
+$script = Join-Path $PSScriptRoot "dist\index.js"
 
 # Copilot CLI auth lives under the user profile; the copilot profile resolves it
-# via $HOME, which Windows does not set by default.
-if (-not $env:HOME) { $env:HOME = $env:USERPROFILE }
+# via $HOME, which Windows does not set by default. Set it unconditionally so the
+# task env is deterministic regardless of how it was launched.
+$env:HOME = $env:USERPROFILE
 
 # Pin absolute binaries (don't rely on the scheduled-task PATH).
 $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { $node = "C:\nvm4w\nodejs\node.exe" }
 $copilot = (Get-Command copilot -ErrorAction SilentlyContinue).Source
-if ($copilot) { $env:COPILOT_CLI_PATH = $copilot }
+if (-not $copilot) {
+  $fallback = Join-Path $env:USERPROFILE "AppData\Local\Microsoft\WinGet\Links\copilot.exe"
+  if (Test-Path $fallback) { $copilot = $fallback }
+}
+if ($copilot -and (Test-Path $copilot)) {
+  $env:COPILOT_CLI_PATH = $copilot
+} else {
+  "WARNING: copilot CLI not found on PATH or WinGet Links; the bot will still start but Copilot turns will fail until it is installed" >> $log
+}
 
 $backoff = 5
 while ($true) {
@@ -33,7 +43,7 @@ while ($true) {
     }
   } catch { }
 
-  "==== [$((Get-Date).ToString('s'))] launching: $node dist\index.js (HOME=$env:HOME) ====" >> $log
+  "==== [$((Get-Date).ToString('s'))] launching: $node $script (HOME=$env:HOME) ====" >> $log
   if (-not (Test-Path $node)) {
     "ERROR: node not found ($node); retrying in 30s" >> $log
     Start-Sleep -Seconds 30
@@ -41,7 +51,7 @@ while ($true) {
   }
 
   $start = Get-Date
-  & $node "dist\index.js" *>> $log
+  & $node $script *>> $log
   $code = $LASTEXITCODE
   $ranSec = [int]((Get-Date) - $start).TotalSeconds
 
