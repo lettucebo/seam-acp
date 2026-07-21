@@ -534,14 +534,14 @@ export class DiscordAdapter implements ChatAdapter {
     });
     this.client.on(Events.InteractionCreate, (interaction) => {
       if (interaction.isAutocomplete()) {
-        if (interaction.commandName !== "seam") return;
+        if (interaction.commandName !== this.config.DISCORD_COMMAND_NAME) return;
         this.handleAutocomplete(interaction).catch((err) => {
           this.logger.error({ err }, "autocomplete handler crashed");
         });
         return;
       }
       if (!interaction.isChatInputCommand()) return;
-      if (interaction.commandName !== "seam") return;
+      if (interaction.commandName !== this.config.DISCORD_COMMAND_NAME) return;
       this.handleSlash(interaction).catch((err) => {
         this.logger.error({ err }, "slash handler crashed");
       });
@@ -819,7 +819,9 @@ export class DiscordAdapter implements ChatAdapter {
     const rest = new REST({ version: "10" }).setToken(
       this.config.DISCORD_BOT_TOKEN
     );
-    const body = [buildSeamCommand(this.config.REPOS_ROOT).toJSON()];
+    const body = [
+      buildSeamCommand(this.config.REPOS_ROOT, this.config.DISCORD_COMMAND_NAME).toJSON(),
+    ];
     const guildIds = this.config.DISCORD_DEV_GUILD_ID;
     if (guildIds.length > 0) {
       // Register to each listed guild — instant, and scoped to servers we

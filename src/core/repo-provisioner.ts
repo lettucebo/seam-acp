@@ -261,6 +261,7 @@ export class RepoProvisioner {
       hostPolicy: HostPolicy;
       allowlistHosts?: Set<string>;
       cloneTimeoutMs?: number;
+      commandName?: string;
     }
   ) {}
 
@@ -296,7 +297,7 @@ export class RepoProvisioner {
     const name = requestedName ? validateTargetName(requestedName) : parsed.defaultName;
     const finalPath = path.join(this.reposRoot, name);
     if (fs.existsSync(finalPath)) {
-      throw new Error(`\`${name}\` already exists under REPOS_ROOT. Use \`/seam repo set ${name}\`.`);
+      throw new Error(`\`${name}\` already exists under REPOS_ROOT. Use \`/${this.opts.commandName ?? "seam"} repo set ${name}\`.`);
     }
     ensureToolAvailable(parsed.kind === "gh" ? GH : GIT);
     await this.ensureDiskSpace();
@@ -319,7 +320,7 @@ export class RepoProvisioner {
     const name = validateTargetName(requestedName);
     const finalPath = path.join(this.reposRoot, name);
     if (fs.existsSync(finalPath)) {
-      throw new Error(`\`${name}\` already exists under REPOS_ROOT. Use \`/seam repo set ${name}\`.`);
+      throw new Error(`\`${name}\` already exists under REPOS_ROOT. Use \`/${this.opts.commandName ?? "seam"} repo set ${name}\`.`);
     }
     ensureToolAvailable(GIT);
     const staging = this.stagingDir();

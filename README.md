@@ -34,6 +34,7 @@ Copy `.env.example` to `.env` and fill it in.
 | `DISCORD_ALLOWED_USER_IDS` | yes | Comma-separated Discord user IDs that can control the bot (e.g. `123,456`) |
 | `DISCORD_ALLOWED_CHANNEL_IDS` | no | Comma-separated parent channel IDs the bot is allowed to operate in. When set, the bot only responds in threads whose parent channel is in this list. When unset, all channels are allowed. |
 | `DISCORD_DEV_GUILD_ID` | no | Set to register slash commands instantly to one guild (good for dev) |
+| `DISCORD_COMMAND_NAME` | no | The slash-command name (the `/seam` prefix). Set per instance to expose a different command, e.g. `copilot` → `/copilot`, `scout` → `/scout`. Lowercase, 1-32 of `a-z 0-9 _ -`. Default `seam` |
 | `REPOS_ROOT` | yes | Root folder containing repos the agent can touch |
 | `REPO_CLONE_HOST_POLICY` | no | `/seam repo clone` host policy: `github` (default — only github.com, safest), `public` (any external host over https/ssh; internal/loopback blocked), or `allowlist` |
 | `REPO_CLONE_ALLOWED_HOSTS` | no | Comma-separated hostnames permitted when `REPO_CLONE_HOST_POLICY=allowlist` |

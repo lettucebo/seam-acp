@@ -66,6 +66,20 @@ const Schema = z.object({
       return ids;
     }),
 
+  /**
+   * The Discord slash-command name (the "/seam" prefix). Configurable so
+   * different bot instances can expose different commands (e.g. /copilot,
+   * /scout). Lowercased; must match Discord's command-name rule.
+   */
+  DISCORD_COMMAND_NAME: z
+    .string()
+    .default("seam")
+    .transform((v) => v.trim().toLowerCase())
+    .refine((v) => /^[a-z0-9_-]{1,32}$/.test(v), {
+      message:
+        "DISCORD_COMMAND_NAME must be 1-32 chars of a-z, 0-9, '_' or '-' (Discord slash-command rule)",
+    }),
+
   REPOS_ROOT: z.string().min(1, "REPOS_ROOT is required"),
   DATA_DIR: z.string().default("./data"),
   /**

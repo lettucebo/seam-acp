@@ -157,6 +157,7 @@ export class Orchestrator {
         ? { allowlistHosts: opts.config.REPO_CLONE_ALLOWED_HOSTS }
         : {}),
       cloneTimeoutMs: opts.config.REPO_CLONE_TIMEOUT_MS,
+      commandName: opts.config.DISCORD_COMMAND_NAME,
     });
   }
 
@@ -2378,7 +2379,7 @@ export class Orchestrator {
     }
     const rows = this.store.listScheduledByChannel(PLATFORM, channel.id);
     if (rows.length === 0) {
-      await i.reply({ content: "No scheduled prompts for this thread. Create one with `/seam schedule add`.", flags: MessageFlags.Ephemeral });
+      await i.reply({ content: `No scheduled prompts for this thread. Create one with \`/${this.cmd} schedule add\`.`, flags: MessageFlags.Ephemeral });
       return;
     }
     await i.reply({ ...this.buildScheduleListMessage(channel), flags: MessageFlags.Ephemeral });
@@ -2543,7 +2544,7 @@ export class Orchestrator {
   private async cmdScheduleAdd(i: ChatInputCommandInteraction | MessageComponentInteraction, existing?: ScheduledPrompt): Promise<void> {
     const channel = this.channelRefFromInteraction(i);
     if (!channel) {
-      await i.reply({ content: "Use `/seam schedule add` inside a thread.", flags: MessageFlags.Ephemeral });
+      await i.reply({ content: `Use \`/${this.cmd} schedule add\` inside a thread.`, flags: MessageFlags.Ephemeral });
       return;
     }
     // Bind the thread to a session record if it isn't already (so the job has a
@@ -2593,8 +2594,8 @@ export class Orchestrator {
       const next = state.cron ? cronNextRun(state.cron, state.timezone) : null;
       const filesValue = existing
         ? (editFiles.length
-            ? editFiles.map((a) => `\`${a.filename}\``).join(", ") + " · *(remove below; add via `/seam schedule addfile`)*"
-            : "*(none — add via `/seam schedule addfile`)*")
+            ? editFiles.map((a) => `\`${a.filename}\``).join(", ") + ` · *(remove below; add via \`/${this.cmd} schedule addfile\`)*`
+            : `*(none — add via \`/${this.cmd} schedule addfile\`)*`)
         : (state.files.length ? state.files.map((f) => `\`${f.name}\``).join(", ") : "*(none)*");
       const embed = new EmbedBuilder()
         .setTitle(existing ? `✏️ Edit scheduled prompt \`${existing.id}\`` : "⏰ New scheduled prompt")
@@ -2840,8 +2841,8 @@ export class Orchestrator {
               `\nOutput as: ${state.outputType === "messages" ? "plain messages" : "status cards"}` +
               (next ? `\nNext run: <t:${Math.floor(next.getTime() / 1000)}:F>` : "") +
               (row.attachments.length ? `\n📎 ${row.attachments.length} file(s) attached` : "") +
-              (existing && !row.enabled ? `\n\n⏸️ This schedule is currently disabled — enable it with \`/seam schedule toggle\`.` : "") +
-              `\n\nManage it with \`/seam schedule list\`.`
+              (existing && !row.enabled ? `\n\n⏸️ This schedule is currently disabled — enable it with \`/${this.cmd} schedule toggle\`.` : "") +
+              `\n\nManage it with \`/${this.cmd} schedule list\`.`
             );
           await i.editReply({ embeds: [confirm], components: [] });
         }
@@ -2882,7 +2883,7 @@ export class Orchestrator {
     } catch (err) {
       this.logger.warn({ err, threadId: thread.id }, "auto-init after /seam new failed");
       await i.editReply(
-        `Created thread <#${thread.id}>. Run \`/seam init\` there to begin.`
+        `Created thread <#${thread.id}>. Run \`/${this.cmd} init\` there to begin.`
       );
     }
   }
@@ -2905,6 +2906,16 @@ export class Orchestrator {
    * session so the agent does not resume the previous repo's context). Returns
    * the bound canonical path, or null after replying with the failure reason.
    */
+  /** The configured slash-command name (the "/seam" prefix), e.g. "copilot". */
+  private get cmd(): string {
+    return this.config.DISCORD_COMMAND_NAME;
+  }
+
+  /** Standard "run this inside a thread" reply text (command-name aware). */
+  private threadRequiredMsg(): string {
+    return `請在 thread 內使用（先用 \`/${this.cmd} new\` 建立一個 thread）。`;
+  }
+
   private async bindRepo(
     i: ChatInputCommandInteraction,
     requestedPath: string
@@ -2912,7 +2923,7 @@ export class Orchestrator {
     const ch = i.channel;
     if (!ch || !ch.isThread()) {
       await i.reply({
-        content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
+        content: this.threadRequiredMsg(),
         flags: MessageFlags.Ephemeral,
       });
       return null;
@@ -2954,7 +2965,7 @@ export class Orchestrator {
     const ch = i.channel;
     if (!ch || !ch.isThread()) {
       await i.reply({
-        content: "請在 thread 內使用（先用 `/seam new` 建立一個 thread）。",
+        content: this.threadRequiredMsg(),
         flags: MessageFlags.Ephemeral,
       });
       return null;
@@ -2962,7 +2973,7 @@ export class Orchestrator {
     if (!this.config.DISCORD_ALLOWED_CHANNEL_IDS) {
       await i.reply({
         content:
-          "Provisioning 已停用：請先設定 `DISCORD_ALLOWED_CHANNEL_IDS` 才能使用 `/seam repo clone|new`。",
+          `Provisioning 已停用：請先設定 \`DISCORD_ALLOWED_CHANNEL_IDS\` 才能使用 \`/${this.cmd} repo clone|new\`。`,
         flags: MessageFlags.Ephemeral,
       });
       return null;
@@ -2994,7 +3005,7 @@ export class Orchestrator {
         );
       } catch (bindErr) {
         await i.editReply(
-          `✅ Cloned to \`${this.repoDisplay(result.path)}\`, but binding failed: ${(bindErr as Error).message}\nRun \`/seam repo set ${result.name}\`.`
+          `✅ Cloned to \`${this.repoDisplay(result.path)}\`, but binding failed: ${(bindErr as Error).message}\nRun \`/${this.cmd} repo set ${result.name}\`.`
         );
       }
     } catch (err) {
@@ -3027,7 +3038,7 @@ export class Orchestrator {
         );
       } catch (bindErr) {
         await i.editReply(
-          `✅ Created \`${result.name}\`, but binding failed: ${(bindErr as Error).message}\nRun \`/seam repo set ${result.name}\`.`
+          `✅ Created \`${result.name}\`, but binding failed: ${(bindErr as Error).message}\nRun \`/${this.cmd} repo set ${result.name}\`.`
         );
       }
     } catch (err) {
@@ -3089,7 +3100,7 @@ export class Orchestrator {
 
       if (models.length === 0) {
         await i.editReply(
-          `Current model: ${displayCurrent}\n_(agent did not advertise any models — pass an id manually: \`/seam model id:<name>\`.)_`
+          `Current model: ${displayCurrent}\n_(agent did not advertise any models — pass an id manually: \`/${this.cmd} model id:<name>\`.)_`
         );
         return;
       }
@@ -3362,7 +3373,7 @@ export class Orchestrator {
     if (supported.length === 0) {
       const msg =
         eff?.mechanism === "modelBaked"
-          ? `Effort for \`${record.agentId}\` is part of the **model** choice — pick a high/med/low model variant with \`/seam model\`.`
+          ? `Effort for \`${record.agentId}\` is part of the **model** choice — pick a high/med/low model variant with \`/${this.cmd} model\`.`
           : `The active agent (\`${record.agentId}\`) doesn't support a reasoning-effort setting.`;
       await i.reply({ content: msg, flags: MessageFlags.Ephemeral });
       return;
@@ -3378,7 +3389,7 @@ export class Orchestrator {
         const body =
           cfg.reasoningEffort
             ? `Reasoning effort: \`${cfg.reasoningEffort}\`.`
-            : `Reasoning effort is **unset** — the agent uses its own default. Set with \`/seam effort level:<${supported.join("|")}>\`.`;
+            : `Reasoning effort is **unset** — the agent uses its own default. Set with \`/${this.cmd} effort level:<${supported.join("|")}>\`.`;
         await i.reply({ content: body, flags: MessageFlags.Ephemeral });
         return;
       }
@@ -3456,7 +3467,7 @@ export class Orchestrator {
     const outcome = await this.router.abortTurn(record.id, { force: false });
     await i.editReply(
       outcome === "idle" ? "No active turn." :
-      "🟡 Cancel sent. If the turn doesn't stop shortly, use `/seam abort` to force it."
+      `🟡 Cancel sent. If the turn doesn't stop shortly, use \`/${this.cmd} abort\` to force it.`
     );
   }
 
@@ -3506,7 +3517,7 @@ export class Orchestrator {
   private async cmdImage(i: ChatInputCommandInteraction): Promise<void> {
     const channel = this.channelRefFromInteraction(i);
     if (!channel) {
-      await i.reply({ content: "Use `/seam image` from inside a thread.", flags: MessageFlags.Ephemeral });
+      await i.reply({ content: `Use \`/${this.cmd} image\` from inside a thread.`, flags: MessageFlags.Ephemeral });
       return;
     }
     const initialPrompt = i.options.getString("prompt") ?? "";
@@ -5600,7 +5611,7 @@ export class Orchestrator {
     const channel = this.channelRefFromInteraction(i);
     if (!channel) {
       await i.reply({
-        content: "Use `/seam init` inside a thread.",
+        content: `Use \`/${this.cmd} init\` inside a thread.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -5713,7 +5724,7 @@ export class Orchestrator {
     const channel = this.channelRefFromInteraction(i);
     if (!channel) {
       await i.reply({
-        content: "Use `/seam attach` from inside a thread.",
+        content: `Use \`/${this.cmd} attach\` from inside a thread.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -5838,7 +5849,7 @@ export class Orchestrator {
       (record.agentId.startsWith("copilot-") && !record.agentId.startsWith("copilot-remote"));
     if (!isAgy && !isClaude && !isCopilot) {
       await i.editReply({
-        content: `\`/seam usage\` is only available for the \`agy\`, \`claude\`, and \`copilot\` agents. This thread uses \`${record.agentId}\`.`,
+        content: `\`/${this.cmd} usage\` is only available for the \`agy\`, \`claude\`, and \`copilot\` agents. This thread uses \`${record.agentId}\`.`,
       });
       return;
     }
@@ -5900,28 +5911,29 @@ export class Orchestrator {
   }
 
   private async cmdHelp(i: ChatInputCommandInteraction): Promise<void> {
+    const c = `/${this.config.DISCORD_COMMAND_NAME}`;
     const lines = [
       "**seam-acp** — control the agent in this thread.",
       "",
-      "`/seam new [name]` — create a new agent thread",
-      "`/seam init` — bind this thread + show repo picker",
-      "`/seam repo set <path>` — set working repo (type to search / autocomplete)",
-      "`/seam repo list` — list repos under REPOS_ROOT",
-      "`/seam repo clone <source> [name]` — clone a remote repo and bind it",
-      "`/seam repo new <name>` — create a new empty repo and bind it",
-      "`/seam model [id]` — get / set agent model",
-      "`/seam mode <id>` — set agent operational mode",
-      "`/seam effort <low|medium|high>` — reasoning effort",
-      "`/seam tools <allow|exclude> [list]` — tool filters",
-      "`/seam approve <always|ask|deny>` — permission policy",
-      "`/seam abort` — cancel current turn",
-      "`/seam config` — show session config JSON",
-      "`/seam config-set <json>` — replace session config",
-      "`/seam sessions` — list known sessions",
-      "`/seam attach <path>` — upload a host-side file (under REPOS_ROOT or ATTACH_ROOTS) to this channel",
-      "`/seam whoami` — show the account this thread's agent is signed in as",
-      "`/seam usage` — show usage / credits (agy only)",
-      "`/seam avatar` — re-push bot avatar to Discord",
+      `\`${c} new [name]\` — create a new agent thread`,
+      `\`${c} init\` — bind this thread + show repo picker`,
+      `\`${c} repo set <path>\` — set working repo (type to search / autocomplete)`,
+      `\`${c} repo list\` — list repos under REPOS_ROOT`,
+      `\`${c} repo clone <source> [name]\` — clone a remote repo and bind it`,
+      `\`${c} repo new <name>\` — create a new empty repo and bind it`,
+      `\`${c} model [id]\` — get / set agent model`,
+      `\`${c} mode <id>\` — set agent operational mode`,
+      `\`${c} effort <low|medium|high>\` — reasoning effort`,
+      `\`${c} tools <allow|exclude> [list]\` — tool filters`,
+      `\`${c} approve <always|ask|deny>\` — permission policy`,
+      `\`${c} abort\` — cancel current turn`,
+      `\`${c} config\` — show session config JSON`,
+      `\`${c} config-set <json>\` — replace session config`,
+      `\`${c} sessions\` — list known sessions`,
+      `\`${c} attach <path>\` — upload a host-side file (under REPOS_ROOT or ATTACH_ROOTS) to this channel`,
+      `\`${c} whoami\` — show the account this thread's agent is signed in as`,
+      `\`${c} usage\` — show usage / credits (agy only)`,
+      `\`${c} avatar\` — re-push bot avatar to Discord`,
       "",
       "Free-form messages in a thread are sent to the agent.",
     ];
@@ -6156,7 +6168,7 @@ export class Orchestrator {
     if (dirs.length === 0) {
       await this.adapter.sendMessage(
         channel,
-        `⚠️ No repos under \`${this.config.REPOS_ROOT}\`. Use \`/seam repo set <path>\`.`
+        `⚠️ No repos under \`${this.config.REPOS_ROOT}\`. Use \`/${this.cmd} repo set <path>\`.`
       );
       return;
     }
@@ -6170,7 +6182,7 @@ export class Orchestrator {
         .join("\n");
       await this.adapter.sendMessage(
         channel,
-        `🗂️ **Available repos**\n${this.renderer.codeBlock(lines)}\nUse \`/seam repo set <name>\`.`
+        `🗂️ **Available repos**\n${this.renderer.codeBlock(lines)}\nUse \`/${this.cmd} repo set <name>\`.`
       );
       return;
     }
@@ -6183,7 +6195,7 @@ export class Orchestrator {
       panel: {
         color: 0x5865f2,
         title: "🗂️ Select a project to begin",
-        description: overflow > 0 ? `_(Showing first 25 of ${dirs.length} projects. Use \`/seam repo set <path>\` to access the rest.)_` : undefined,
+        description: overflow > 0 ? `_(Showing first 25 of ${dirs.length} projects. Use \`/${this.cmd} repo set <path>\` to access the rest.)_` : undefined,
         fields: [],
       },
       choices: top.map((p) => ({
@@ -6365,7 +6377,7 @@ export class Orchestrator {
         );
         await this.adapter.sendMessage(
           channel,
-          `_Could not list models: ${(err as Error).message}. Use \`/seam model\` later._`
+          `_Could not list models: ${(err as Error).message}. Use \`/${this.cmd} model\` later._`
         );
       }
     }

@@ -38,4 +38,17 @@ describe("buildSeamCommand", () => {
     const repo = options.find((o) => o.name === "repo");
     expect(repo!.type).not.toBe(1); // not a plain subcommand
   });
+
+  it("uses the configured command name", () => {
+    expect(buildSeamCommand("C:/x", "copilot").toJSON().name).toBe("copilot");
+    expect(buildSeamCommand("C:/x", "scout").toJSON().name).toBe("scout");
+    // no arg -> default
+    expect(buildSeamCommand().toJSON().name).toBe("seam");
+  });
+
+  it("bakes the configured name into option descriptions (no stray /seam)", () => {
+    const json = JSON.stringify(buildSeamCommand("C:/x", "copilot").toJSON());
+    expect(json).not.toContain("/seam ");
+    expect(json).toContain("/copilot schedule list");
+  });
 });
