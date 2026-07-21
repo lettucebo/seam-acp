@@ -20,13 +20,19 @@ export function detectNewline(text) {
 export function serializeValue(value) {
   const v = String(value);
   if (v === "") return "";
-  // Quote when the value has whitespace, a hash, or a quote char; otherwise a
-  // bare value (incl. Windows backslash paths) round-trips fine unquoted.
-  const needsQuote = /[\s#"']/.test(v);
+  // dotenv only needs quoting when unquoted parsing would change the value:
+  //  - leading/trailing whitespace (dotenv trims it)
+  //  - an inline comment (whitespace followed by '#')
+  //  - a leading quote char (dotenv would treat the value as quoted)
+  // A bare mid-value quote/hash/backslash round-trips fine unquoted — which is
+  // also the ONLY safe encoding for Windows backslash paths (dotenv expands
+  // \n/\r inside double quotes and can't carry a literal backslash).
+  const needsQuote =
+    /^\s|\s$/.test(v) || v.includes("#") || v[0] === '"' || v[0] === "'";
   if (!needsQuote) return v;
-  if (!v.includes("'")) return `'${v}'`;
-  // Rare: value contains a single quote. Double-quote and escape the sequences
-  // dotenv unescapes inside double quotes.
+  if (!v.includes("'")) return `'${v}'`; // single quotes are literal in dotenv
+  // Value has a single quote AND needs quoting: fall back to double quotes and
+  // escape only real control chars (dotenv unescapes \n/\r/\t inside quotes).
   const esc = v
     .replace(/\n/g, "\\n")
     .replace(/\r/g, "\\r")
@@ -38,8 +44,10 @@ const KEY_RE = /^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*)=(.*)$/;
 
 /**
  * Apply `updates` (object of key -> value) to `.env` text.
- * Existing managed keys are replaced in place; unmanaged lines, comments, order,
- * and newline style are preserved; keys not present are appended at the end.
+ * - A value of `null`/`undefined` DELETES every line for that key.
+ * - Otherwise the key is replaced at its LAST occurrence (dotenv is last-wins),
+ *   earlier duplicates of that managed key are dropped, and keys not present are
+ *   appended. Unmanaged lines, comments, order, and newline style are preserved.
  */
 export function applyEnvUpdates(originalText, updates) {
   const nl = detectNewline(originalText);
@@ -49,20 +57,32 @@ export function applyEnvUpdates(originalText, updates) {
     lines.pop();
   }
 
-  const remaining = { ...updates };
-  const out = lines.map((line) => {
+  const keys = Object.keys(updates);
+  const deleteKeys = new Set(keys.filter((k) => updates[k] === null || updates[k] === undefined));
+
+  // Find the LAST line index for each managed key (dotenv reads last-wins).
+  const lastIndex = {};
+  lines.forEach((line, i) => {
     const m = line.match(KEY_RE);
-    if (m && Object.prototype.hasOwnProperty.call(remaining, m[2])) {
-      const key = m[2];
-      const rendered = `${m[1]}${key}${m[3]}=${serializeValue(remaining[key])}`;
-      delete remaining[key];
-      return rendered;
-    }
-    return line;
+    if (m && Object.prototype.hasOwnProperty.call(updates, m[2])) lastIndex[m[2]] = i;
   });
 
-  for (const key of Object.keys(remaining)) {
-    out.push(`${key}=${serializeValue(remaining[key])}`);
+  const out = [];
+  lines.forEach((line, i) => {
+    const m = line.match(KEY_RE);
+    if (m && Object.prototype.hasOwnProperty.call(updates, m[2])) {
+      const key = m[2];
+      if (deleteKeys.has(key)) return; // drop all occurrences
+      if (i !== lastIndex[key]) return; // drop earlier duplicates; keep the last
+      out.push(`${m[1]}${key}${m[3]}=${serializeValue(updates[key])}`);
+      return;
+    }
+    out.push(line);
+  });
+
+  for (const key of keys) {
+    if (deleteKeys.has(key)) continue;
+    if (!(key in lastIndex)) out.push(`${key}=${serializeValue(updates[key])}`);
   }
 
   let result = out.join(nl);

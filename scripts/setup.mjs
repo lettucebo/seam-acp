@@ -111,6 +111,8 @@ function askHidden(query) {
           return resolve(input);
         }
         if (ch === "\u0003") {
+          stdin.setRawMode?.(wasRaw);
+          stdin.pause();
           process.stdout.write("\n");
           process.exit(130);
         } else if (ch === "\u007f" || ch === "\b") {
@@ -252,7 +254,7 @@ async function main() {
   }
 
   const updates = {};
-  const missing = [];
+  const problems = [];
   for (const f of FIELDS) {
     const current = existingValues[f.key];
     const fallback = current ?? f.default;
@@ -261,8 +263,10 @@ async function main() {
       const value = fallback ?? "";
       const res = f.validate ? f.validate(value) : { ok: true };
       if (!res.ok) {
-        if (f.required) missing.push(`${f.key} (${res.error})`);
-        continue; // leave optional invalid/empty as-is
+        // validate() returns ok for optional-empty, so any failure here is a
+        // real problem (required-missing or an invalid managed value) → fatal.
+        problems.push(`${f.key} (${res.error})`);
+        continue;
       }
       if (current === undefined || current !== value) updates[f.key] = value;
       continue;
@@ -285,23 +289,28 @@ async function main() {
     }
   }
 
-  if (missing.length) {
-    failmsg("missing required configuration and no TTY to prompt:");
-    for (const m of missing) info("  - " + m);
-    info(dim("Provide them in .env (or run interactively) and re-run."));
+  if (problems.length) {
+    failmsg("invalid or missing configuration and no TTY to prompt:");
+    for (const m of problems) info("  - " + m);
+    info(dim("Fix them in .env (or run interactively) and re-run."));
     process.exit(2);
   }
 
   // Auto-manage COPILOT_CLI_PATH so the launcher/app use an explicit absolute
   // binary. dotenv loads with override:true, so an empty value would ERASE the
-  // launcher's path — only write a real resolved path, never an empty one.
+  // launcher's path — write a real resolved path, or DELETE the key entirely.
   const copilotPath = resolveCopilotPath();
-  if (copilotPath) {
-    if (process.platform === "win32" && !copilotPath.toLowerCase().endsWith(".exe")) {
+  const winShim =
+    copilotPath && process.platform === "win32" && !copilotPath.toLowerCase().endsWith(".exe");
+  if (copilotPath && !winShim) {
+    if (existingValues.COPILOT_CLI_PATH !== copilotPath) updates.COPILOT_CLI_PATH = copilotPath;
+  } else {
+    if (winShim) {
       warn(`resolved copilot is not an .exe (${copilotPath}); the app spawns without a shell and cannot run .cmd/.ps1 shims. Prefer 'winget install GitHub.Copilot'.`);
-    } else if (existingValues.COPILOT_CLI_PATH !== copilotPath) {
-      updates.COPILOT_CLI_PATH = copilotPath;
     }
+    // Drop an empty COPILOT_CLI_PATH= (e.g. copied from .env.example) so it can't
+    // override the launcher's env at runtime. Never delete a user-set path.
+    if ((existingValues.COPILOT_CLI_PATH ?? "") === "") updates.COPILOT_CLI_PATH = null;
   }
 
   // Write .env (atomic, restrictive perms established before secret bytes).
@@ -333,8 +342,13 @@ async function main() {
   // Build.
   step("Installing dependencies & building");
   const hasLock = fs.existsSync(path.join(REPO_ROOT, "package-lock.json"));
-  runOrDry([process.platform === "win32" ? "npm.cmd" : "npm", hasLock ? "ci" : "install"]);
-  runOrDry([process.platform === "win32" ? "npm.cmd" : "npm", "run", "build"]);
+  const hasModules = fs.existsSync(path.join(REPO_ROOT, "node_modules"));
+  // `npm ci` wipes node_modules — deterministic for a FRESH install, but on a
+  // Windows re-run a running bot locks better_sqlite3.node and the wipe fails
+  // (EPERM). Reconcile with `npm install` when node_modules already exists.
+  const npmSub = hasLock && !hasModules ? "ci" : "install";
+  runOrDry(["npm", npmSub]);
+  runOrDry(["npm", "run", "build"]);
 
   // Auth checks (best-effort, never block).
   step("Auth checks");
@@ -364,6 +378,17 @@ function writeFilePrivate(file, content) {
     /* best effort */
   }
   fs.renameSync(tmp, file);
+  // Windows: 0o600 is a no-op; restrict the DACL to the current user (best effort).
+  if (process.platform === "win32") {
+    const user = process.env.USERDOMAIN && process.env.USERNAME
+      ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+      : process.env.USERNAME;
+    if (user) {
+      spawnSync("icacls", [file, "/inheritance:r", "/grant:r", `${user}:F`], {
+        stdio: "ignore",
+      });
+    }
+  }
 }
 
 function ensureDir(dir, label) {
@@ -383,11 +408,13 @@ function runOrDry(cmd) {
     return;
   }
   info(dim("$ " + cmd.join(" ")));
-  const r = spawnSync(cmd[0], cmd.slice(1), {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-    shell: false,
-  });
+  // On Windows, npm is a `.cmd` shim; spawning it with shell:false throws EINVAL
+  // (Node's CVE-2024-27980 fix, present in every Node >=22). Run it through the
+  // shell there. Our args are static (ci / run build), so there's no injection.
+  const isWin = process.platform === "win32";
+  const r = isWin
+    ? spawnSync(cmd.join(" "), { cwd: REPO_ROOT, stdio: "inherit", shell: true })
+    : spawnSync(cmd[0], cmd.slice(1), { cwd: REPO_ROOT, stdio: "inherit", shell: false });
   if (r.status !== 0) die(`command failed: ${cmd.join(" ")}`);
 }
 

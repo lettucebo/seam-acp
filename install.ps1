@@ -81,21 +81,28 @@ function Install-Tool($Cmd, $WingetId, $ChocoId) {
   Okay "$Cmd installed"
 }
 
+function Test-CopilotExe {
+  # The app spawns copilot WITHOUT a shell, so it needs a real .exe, not npm's
+  # .cmd/.ps1 shim. Return true only if a copilot.exe resolves on PATH.
+  $c = Get-Command copilot -ErrorAction SilentlyContinue
+  return ($c -and $c.Source -and $c.Source.ToLower().EndsWith(".exe"))
+}
+
 function Install-Copilot {
-  if (Get-Command copilot -ErrorAction SilentlyContinue) { Okay "copilot present"; return }
+  if (Test-CopilotExe) { Okay "copilot present (copilot.exe)"; return }
+  $shim = Get-Command copilot -ErrorAction SilentlyContinue
+  if ($shim) { Note "found '$($shim.Source)' but it is not a real .exe; installing the winget copilot.exe (the app cannot run a .cmd/.ps1 shim)" }
   Section "Installing GitHub Copilot CLI"
   if ($DryRun) { Note "dry-run: would 'winget install GitHub.Copilot'"; return }
   if ($PM -eq "winget") {
-    # winget gives a real copilot.exe. The app spawns without a shell, so it
-    # CANNOT use the npm .cmd shim - prefer winget on Windows.
     winget install -e --id GitHub.Copilot --accept-source-agreements --accept-package-agreements --silent
   } else {
     Note "winget not available. Install Copilot CLI so it provides a real copilot.exe (npm's .cmd shim will NOT work with the app's shell-less spawn)."
     return
   }
   RefreshSessionPath
-  if (Get-Command copilot -ErrorAction SilentlyContinue) { Okay "copilot installed" }
-  else { Note "copilot not on PATH yet - open a new terminal, then run: copilot login" }
+  if (Test-CopilotExe) { Okay "copilot.exe installed" }
+  else { Note "copilot.exe not on PATH yet - open a new terminal, then run: copilot login" }
 }
 
 # --- residency (reuse run-bot.ps1 + fixed task name) ------------------------
@@ -159,6 +166,21 @@ if ($DryRun) { Note "dry-run: no changes will be made" }
 if (-not $PM) { Note "no winget/choco detected; prerequisite auto-install is limited" }
 
 Section "Prerequisites"
+# Up-front consent: list what's missing before installing anything.
+if (-not $DryRun) {
+  $need = @()
+  if ((Get-NodeMajor) -lt 22) { $need += "node" }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $need += "git" }
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { $need += "gh" }
+  if (-not (Test-CopilotExe)) { $need += "copilot" }
+  if ($need.Count -gt 0) {
+    Note ("will install: " + ($need -join ", ") + "  (via $PM)")
+    if (-not ($Yes -or [Console]::IsInputRedirected)) {
+      $ans = Read-Host "Proceed with installing the above? (Y/n)"
+      if ($ans -match "^(n|no)$") { Die "aborted by user" }
+    }
+  }
+}
 Install-NodeMin
 Install-Tool "git" "Git.Git" "git"
 Install-Tool "gh" "GitHub.cli" "gh"

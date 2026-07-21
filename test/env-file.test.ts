@@ -52,6 +52,18 @@ describe("applyEnvUpdates", () => {
     expect(parseDotenv(out).REPOS_ROOT).toBe("C:\\Source\\Repos");
     expect(parseDotenv(out).HEALTH_PORT).toBe("8080");
   });
+
+  it("updates the LAST occurrence of a duplicated key (dotenv is last-wins)", () => {
+    const out = applyEnvUpdates("TOKEN=old1\nTOKEN=old2\n", { TOKEN: "new" });
+    expect(parseDotenv(out).TOKEN).toBe("new");
+    // no stale duplicate left that dotenv would read
+    expect((out.match(/^TOKEN=/gm) || []).length).toBe(1);
+  });
+
+  it("removes a key line when the update value is null (avoids empty override)", () => {
+    const out = applyEnvUpdates("A=1\nCOPILOT_CLI_PATH=\nB=2\n", { COPILOT_CLI_PATH: null });
+    expect(out).toBe("A=1\nB=2\n");
+  });
 });
 
 describe("serializeValue round-trips through the real dotenv parser", () => {
@@ -62,6 +74,10 @@ describe("serializeValue round-trips through the real dotenv parser", () => {
     ["windows path with a \\n trap", "C:\\temp\\new"],
     ["windows path with a \\t trap", "C:\\temp\\tabbed"],
     ["path with spaces", "C:\\Program Files\\app"],
+    ["windows path with apostrophe + backslash-r trap", "C:\\Users\\O'Brien\\source\\repos"],
+    ["value starting with a double quote", '"lead'],
+    ["value starting with a single quote", "'lead"],
+    ["value with middle spaces", "a b c"],
     ["value containing a hash", "abc#def"],
     ["value with trailing space", "abc "],
     ["value with a single quote", "it's fine"],

@@ -29,5 +29,10 @@ if [ -z "${NODE_BIN}" ]; then
   exit 127
 fi
 
+# Service managers (launchd/systemd) give a minimal PATH; add common tool dirs so
+# the app can find gh/git/copilot for its auxiliary features (whoami, /repo clone).
+NODE_DIR="$(dirname "$NODE_BIN")"
+export PATH="$NODE_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin${PATH:+:$PATH}"
+
 mkdir -p "$SCRIPT_DIR/data"
 exec "$NODE_BIN" "$SCRIPT_DIR/dist/index.js"

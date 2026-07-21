@@ -156,14 +156,22 @@ ensure_copilot() {
 # --- residency --------------------------------------------------------------
 env_value() { # key -> value from .env (best-effort, strips one layer of quotes)
   [ -f "$SCRIPT_DIR/.env" ] || return 0
-  grep -E "^$1=" "$SCRIPT_DIR/.env" | tail -1 | cut -d= -f2- \
-    | sed -e "s/^['\"]//" -e "s/['\"]$//"
+  grep -E "^$1=" "$SCRIPT_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- \
+    | sed -e "s/^['\"]//" -e "s/['\"]$//" || true
 }
+
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 setup_launchd() {
   local label="com.seam-acp.bot"
   local plist="$HOME/Library/LaunchAgents/$label.plist"
   local node_bin; node_bin="$(command -v node || echo /usr/local/bin/node)"
+  local e_run e_dir e_home e_node e_log
+  e_run="$(xml_escape "$SCRIPT_DIR/run-bot.sh")"
+  e_dir="$(xml_escape "$SCRIPT_DIR")"
+  e_home="$(xml_escape "$HOME")"
+  e_node="$(xml_escape "$node_bin")"
+  e_log="$(xml_escape "$SCRIPT_DIR/data/bot.log")"
   mkdir -p "$HOME/Library/LaunchAgents" "$SCRIPT_DIR/data"
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -171,23 +179,24 @@ setup_launchd() {
 <plist version="1.0"><dict>
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key><array>
-    <string>$SCRIPT_DIR/run-bot.sh</string>
+    <string>$e_run</string>
   </array>
-  <key>WorkingDirectory</key><string>$SCRIPT_DIR</string>
+  <key>WorkingDirectory</key><string>$e_dir</string>
   <key>EnvironmentVariables</key><dict>
-    <key>HOME</key><string>$HOME</string>
-    <key>NODE_BIN</key><string>$node_bin</string>
+    <key>HOME</key><string>$e_home</string>
+    <key>NODE_BIN</key><string>$e_node</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>$SCRIPT_DIR/data/bot.log</string>
-  <key>StandardErrorPath</key><string>$SCRIPT_DIR/data/bot.log</string>
+  <key>StandardOutPath</key><string>$e_log</string>
+  <key>StandardErrorPath</key><string>$e_log</string>
 </dict></plist>
 EOF
   plutil -lint "$plist" >/dev/null || die "generated plist failed plutil -lint"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$plist" || die "launchctl bootstrap failed (check: launchctl print gui/$(id -u)/$label)"
+  launchctl enable "gui/$(id -u)/$label" 2>/dev/null || true  # undo a prior stop-bot.sh --disable
   ok "launchd agent loaded: $label"
   warn "macOS LaunchAgents run only AFTER you log in (not pre-login/headless)."
 }
@@ -201,6 +210,7 @@ setup_systemd() {
   local unit="$unit_dir/seam-acp-bot.service"
   local node_bin; node_bin="$(command -v node || echo /usr/bin/node)"
   mkdir -p "$unit_dir" "$SCRIPT_DIR/data"
+  # Quote ExecStart/Environment so paths with spaces don't get split by systemd.
   cat > "$unit" <<EOF
 [Unit]
 Description=seam-acp Discord bot
@@ -210,8 +220,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
-Environment=NODE_BIN=$node_bin
-ExecStart=$SCRIPT_DIR/run-bot.sh
+Environment="NODE_BIN=$node_bin"
+ExecStart="$SCRIPT_DIR/run-bot.sh"
 Restart=always
 RestartSec=5
 StandardOutput=append:$SCRIPT_DIR/data/bot.log
@@ -221,8 +231,10 @@ StandardError=append:$SCRIPT_DIR/data/bot.log
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now seam-acp-bot.service || die "systemctl --user enable --now failed"
-  ok "systemd --user service enabled: seam-acp-bot"
+  systemctl --user enable seam-acp-bot.service || die "systemctl --user enable failed"
+  # restart (not just enable --now) so a re-run actually picks up freshly built code.
+  systemctl --user restart seam-acp-bot.service || die "systemctl --user restart failed"
+  ok "systemd --user service enabled + (re)started: seam-acp-bot"
   if [ "$ENABLE_LINGER" = 1 ]; then
     if loginctl enable-linger "$(id -un)" 2>/dev/null; then
       ok "linger enabled — runs before login / after logout"
@@ -271,6 +283,19 @@ printf '%s\n' "${B}seam-acp installer — ${OS}${Z}"
 [ -z "$PM" ] && warn "no supported package manager detected; prerequisite auto-install is limited"
 
 step "Prerequisites"
+# Up-front consent: list what's missing before installing anything.
+if [ "$DRY" != 1 ]; then
+  need=""
+  [ "$(node_major)" -ge 22 ] 2>/dev/null || need="$need node"
+  command -v git >/dev/null 2>&1 || need="$need git"
+  command -v gh >/dev/null 2>&1 || need="$need gh"
+  command -v copilot >/dev/null 2>&1 || need="$need copilot"
+  if [ -n "$need" ]; then
+    warn "will install:$need"
+    warn "(via ${PM:-package manager}; Homebrew/nvm/copilot may run curl|bash or npm -g — see INSTALL.md)"
+    confirm "Proceed with installing the above?" 1 || die "aborted by user"
+  fi
+fi
 ensure_node
 ensure_cmd git git
 ensure_cmd gh gh

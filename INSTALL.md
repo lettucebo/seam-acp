@@ -42,8 +42,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
    - 安裝後會**刷新 PATH 並重驗**；若當前終端仍找不到，會請你**重開終端再跑一次**（不會硬撐）。
 2. **設定 → `.env`**：互動式逐項詢問（既有值為預設，Enter 沿用），token 隱藏輸入。
    以**資料**方式安全合併（保留註解、未知 key、順序、換行風格），原子寫入、權限 `600`，
-   變更前備份成 `.env.<timestamp>.bak`（已 gitignore）。token 全程不回顯、不傳給子行程。
-3. **建置**：`npm ci`（有 lockfile）＋ `npm run build`。
+   變更前備份成 `.env.<timestamp>.bak`（已 gitignore）。安裝過程 token 不回顯、不寫入命令列、
+   不傳給安裝用的子行程（npm/套件管理器）；Windows 另以 `icacls` 盡力把 `.env` 及備份的權限
+   限縮為本人。（註：bot 執行時本身會把環境變數傳給它 spawn 的 copilot 子行程，這屬 app 行為、非安裝器範圍。）
+3. **建置**：全新安裝用 `npm ci`（有 lockfile），重跑則用 `npm install`（不清空 `node_modules`）＋ `npm run build`。
 4. **認證檢查**（best-effort）：`gh auth status`、Copilot 設定；未認證會提示
    `gh auth login` / `copilot login`。`--skip-auth` 可略過（視為未驗證）。
 5. **常駐（可選）**：見下。
@@ -139,3 +141,4 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 - **`/repo clone｜new` 不能用**：需設 `DISCORD_ALLOWED_CHANNEL_IDS`，且 `gh auth status` 已登入。
 - **HEALTH_PORT 被占用**：改 `.env` 的 `HEALTH_PORT` 到空閒埠（單一實例守衛會擋同埠第二個實例）。
 - **Linux 沒有 systemd `--user`**：用 `./run-bot.sh` 手動啟動，或改用你的 init 系統。
+- **重跑安裝器**：安裝器主要用於**首次安裝**。若 bot 正在常駐執行，重跑時 Windows 上 `npm ci` 可能因原生模組（better-sqlite3）被鎖而失敗——安裝器已改為偵測到 `node_modules` 時用 `npm install`（不清空）規避；純粹更新程式碼請用 `npm run redeploy`（優雅排空後重啟），不需重跑安裝器。macOS/Linux 重跑會重啟服務（短暫中斷）。
