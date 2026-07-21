@@ -73,6 +73,7 @@ import { SessionRouter } from "../../core/session-router.js";
 import { TurnStatus, renderStatusPanel } from "../../core/status-panel.js";
 import { isWithinRoot, resolveRepoPath, resolveRepoWithinRoot } from "../../core/path-utils.js";
 import { RepoProvisioner } from "../../core/repo-provisioner.js";
+import { computeModelChoices, type ModelInfo } from "../../core/model-choices.js";
 import { ATTACH_FENCE_LANG, withHarnessPreamble } from "../../core/agent-conventions.js";
 import { isModelInlineableAttachment } from "../../agents/attachments.js";
 import { stageAttachment, sweepStagedAttachments } from "../../agents/attachment-staging.js";
@@ -1512,8 +1513,7 @@ export class Orchestrator {
       this.config.DEFAULT_MODEL;
     const profile = this.router.getProfile(agentId);
 
-    type M = { modelId: string; name?: string; contextLimit?: number };
-    let source: ReadonlyArray<M> = [];
+    let source: ReadonlyArray<ModelInfo> = [];
     if (profile?.staticModels && profile.staticModels.length > 0) {
       source = profile.staticModels;
     } else if (record && this.router.getLiveModels(record.id)?.length) {
@@ -1522,50 +1522,7 @@ export class Orchestrator {
       source = this.router.getSeenModels(agentId) ?? [];
     }
 
-    // Merge: current model + auto always present, then the catalog; dedupe by id.
-    const merged: M[] = [];
-    const seen = new Set<string>();
-    for (const m of [{ modelId: current }, { modelId: "auto", name: "auto" }, ...source]) {
-      const id = m.modelId;
-      if (!id || seen.has(id.toLowerCase())) continue;
-      seen.add(id.toLowerCase());
-      merged.push(m);
-    }
-
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? merged.filter(
-          (m) =>
-            m.modelId.toLowerCase().includes(q) ||
-            (m.name ?? "").toLowerCase().includes(q)
-        )
-      : merged;
-
-    return filtered.slice(0, 25).map((m) => ({
-      name: this.modelChoiceLabel(m).slice(0, 100),
-      value: m.modelId.slice(0, 100),
-    }));
-  }
-
-  /** Human label for a model choice: name (or id), with context window appended
-   *  when known (e.g. "Opus 4.8 • 1M ctx"). */
-  private modelChoiceLabel(m: {
-    modelId: string;
-    name?: string;
-    contextLimit?: number;
-  }): string {
-    const base = m.name && m.name !== m.modelId ? `${m.name} (${m.modelId})` : m.modelId;
-    if (m.contextLimit && m.contextLimit > 0) {
-      return `${base} • ${this.formatContext(m.contextLimit)} ctx`;
-    }
-    return base;
-  }
-
-  /** Format a token count as a compact window size (200000 → "200K", 1000000 → "1M"). */
-  private formatContext(n: number): string {
-    if (n >= 1_000_000) return `${Math.round((n / 1_000_000) * 10) / 10}M`;
-    if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
-    return String(n);
+    return computeModelChoices(source, current, query);
   }
 
   private async probeCopilotContext(
