@@ -90,9 +90,29 @@ npm start          # = node dist/index.js
    - 選單裡的 **📖 顯示完整執行計畫** → 直接把完整計畫以 render 過的 markdown 印在 thread（外層 ```` ```markdown ```` 包裝會自動拆掉，內層 ```` ```powershell ```` 正確渲染）。
 3. **「接下來怎麼進行？」選單**（**永不逾時**）：📖 顯示完整執行計畫 / 🚀 切 Autopilot 執行 / 🤖 用 Agent 逐步執行 / ✋ 保持 Plan。點 🚀 或 🤖 會切換模式並自動送出「開始執行」。
 
-### 24/7 常駐（Windows）
+### 24/7 常駐（Windows）— 已設定 ✅
 
-`pm2 startup` 在 Windows **不原生支援**。建議用**工作排程器**（登入時啟動、失敗自動重啟）或 [WinSW](https://github.com/winsw/winsw) 包成服務，以「擁有 Copilot 憑證的同一使用者」執行，並停用睡眠。目前以 detached `npm start` 執行可撐過終端關閉，但不含開機自啟/當機自復原。
+以 **工作排程器（登入觸發）** 常駐，**不是 Windows 服務**——因為 Copilot CLI 憑證綁使用者設定檔（`~/.copilot`），服務跑在 session 0 拿不到；登入任務跑在你的 session 才能 spawn `copilot`。
+
+- **任務**：`seam-acp-bot`（AtLogOn / 使用者 `FAREAST\tzyu` / 互動式 / 免系統管理員）。
+- **啟動器 `run-bot.ps1`**：迴圈跑 `node dist/index.js`，任何退出都自動重啟（capped backoff，穩定執行後 reset），輸出附加到 `data/bot.log`（>10MB 自動滾成 `bot.log.1`）；設 `HOME=%USERPROFILE%`、絕對 node 路徑、`COPILOT_CLI_PATH`。
+- **單一實例守衛**：health port（`HEALTH_PORT`，預設 3000）被佔用時第二個實例會乾淨退出（不會搶登入）。
+- **重啟/部署**：`npm run redeploy`（build → 寫 `data/.restart-pending` → bot 排空後**優雅退出** → 迴圈relaunch 新版）。**勿**直接 kill node / `Stop-ScheduledTask` 來重啟。
+- **停止（少用）**：`.\stop-bot.ps1`（停用任務 + 停 node PID；不以名稱殺 `copilot`）。重新啟用：`Enable-ScheduledTask -TaskName seam-acp-bot; Start-ScheduledTask -TaskName seam-acp-bot`。
+- **狀態/日誌**：`Get-ScheduledTask seam-acp-bot`、`Get-Content .\data\bot.log -Tail 100`、`curl http://localhost:3000/health`。
+- **睡眠**（未自動更改，opt-in）：真 24/7 需機器不睡 → `powercfg /change standby-timeout-ac 0`（並視需要關 hibernate）。
+- **限制**：需該使用者**保持登入**；登出、開機到登入前、睡眠/休眠/闔蓋期間為中斷。
+- 註冊指令（一次性）：
+  ```powershell
+  $repo="C:\Source\Repos\seam-acp"; $ps="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  $a=New-ScheduledTaskAction -Execute $ps -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\run-bot.ps1`"" -WorkingDirectory $repo
+  $t=New-ScheduledTaskTrigger -AtLogOn -User "FAREAST\tzyu"
+  $p=New-ScheduledTaskPrincipal -UserId "FAREAST\tzyu" -LogonType Interactive -RunLevel Limited
+  $s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+  Register-ScheduledTask -TaskName "seam-acp-bot" -Action $a -Trigger $t -Principal $p -Settings $s -Force
+  ```
+
+> `npm start`（上面「執行」段）僅供**手動/開發**測試；正式常駐一律用上面的任務。兩者勿同時跑（health port 會擋第二個）。
 
 ## 已知限制 / 待辦
 

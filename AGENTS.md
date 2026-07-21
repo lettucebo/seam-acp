@@ -12,7 +12,13 @@ Your output is streamed to Discord, which does **not** support markdown tables. 
 
 ## ⚠️ CRITICAL: Applying code changes or restarting the app
 
-**Never run `pm2 restart seam-acp` directly.** The bot is managed by PM2. A direct restart kills the process immediately — including the agent session running the command — so your reply will never be delivered to Discord.
+The bot runs 24/7 under a **Windows Task Scheduler logon task** (`seam-acp-bot`)
+whose launcher `run-bot.ps1` keeps `node dist/index.js` running and relaunches it
+on any exit (crash or clean). There is **no PM2**.
+
+**Never kill the bot process, `Stop-ScheduledTask`, or run `npm start` to restart.**
+Killing the node process directly drops the in-flight turn (your reply is never
+delivered), and starting a second `npm start` collides on the health port.
 
 **Always use:**
 
@@ -22,23 +28,29 @@ npm run redeploy
 
 This is the only safe way to apply code changes or restart the bot. It:
 1. Compiles the TypeScript (`npm run build`)
-2. Echoes a confirmation so the reply is delivered
-3. Restarts the PM2 process 3 seconds later in the background
+2. Writes a restart sentinel (`data/.restart-pending`) and echoes a confirmation
+3. The running bot detects the sentinel, drains active turns, then **exits
+   gracefully** — and the `run-bot.ps1` supervisor loop relaunches it with the new
+   code a few seconds later.
 
-If you are asked to:
-- Apply code changes → run `npm run redeploy`
-- Restart the bot → run `npm run redeploy`
-- Rebuild the app → run `npm run redeploy`
+If you are asked to apply code changes / restart / rebuild → run `npm run redeploy`.
 
-Do **not** run `pm2 restart`, `pm2 reload`, `npm start`, or any other direct process restart command.
+**Never** run `Stop-Process` on the bot, `Stop-ScheduledTask seam-acp-bot`, `npm start`,
+or any other direct restart. Also **never** kill processes by the name `copilot`
+(`Stop-Process -Name copilot` / `taskkill /IM copilot.exe`) — that would terminate
+the very Copilot CLI running this agent. The bot's copilot children exit on their
+own when its stdin closes.
 
-## Useful PM2 commands (read-only / safe)
+## Useful commands (read-only / safe)
 
-```bash
-pm2 status                      # check if the bot is running
-pm2 logs seam-acp               # tail live logs
-pm2 logs seam-acp --lines 100   # last 100 log lines
+```powershell
+Get-ScheduledTask -TaskName seam-acp-bot            # task state
+Get-Content .\data\bot.log -Tail 100                # recent logs
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -like '*dist*index.js*'  # is it running
+curl http://localhost:3000/health                   # health probe
 ```
+
+To stop for good (rare): run `.\stop-bot.ps1` (disables the task + stops the node).
 
 ## Project structure
 
@@ -103,7 +115,7 @@ runbook end to end (§1 pull → §2 changelogs → §3 update → §3a patch �
 ## Troubleshooting: 500 / server errors from the Claude API
 
 When a Claude Code session returns persistent `500 Internal server error`
-responses (visible in `pm2 logs` as `"turn failed"` with
+responses (visible in `data/bot.log` as `"turn failed"` with
 `"errorKind":"server_error"`), **check https://status.claude.com first** before
 investigating code-level causes. The error message itself directs you there.
 

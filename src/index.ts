@@ -492,6 +492,9 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // A restart-sentinel (npm run redeploy) triggers the same graceful shutdown;
+  // the supervisor (Task Scheduler + run-bot.ps1, or pm2) then relaunches us.
+  orchestrator.setRestartHook(() => shutdown("restart"));
 }
 
 main().catch((err) => {

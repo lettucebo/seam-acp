@@ -12,6 +12,22 @@ export function startHealthServer(port: number, logger: Logger): Server {
     res.end("seam-acp is running. See /health");
   });
 
+  // The health port doubles as a single-instance guard: if it's already bound,
+  // another seam-acp is running, so exit cleanly instead of crashing (an
+  // unhandled 'error' would otherwise take the process down non-deterministically,
+  // and under a restart supervisor cause a tight crash loop). The OS releases the
+  // port when the owning process dies, so there's no stale-lock problem.
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      logger.error(
+        { port },
+        "health port already in use — another seam-acp instance is running; exiting (single-instance guard)"
+      );
+      process.exit(0);
+    }
+    logger.error({ err }, "health server error");
+  });
+
   server.listen(port, () => {
     logger.info({ port }, "health server listening");
   });

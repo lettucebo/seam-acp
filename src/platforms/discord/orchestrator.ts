@@ -134,6 +134,7 @@ export class Orchestrator {
   /** Set by index.ts after construction; used by /seam schedule handlers to
    *  arm/disarm timers and by the fire runner to drop deleted-thread schedules. */
   private scheduledManager?: ScheduledPromptManager;
+  private restartHook?: () => void | Promise<void>;
   private readonly provisioner: RepoProvisioner;
   /** In-flight repo provisioning (clone/new) per channel id — one at a time. */
   private readonly provisioningThreads = new Set<string>();
@@ -261,14 +262,22 @@ export class Orchestrator {
       // ignore if already gone
     }
 
-    // Spawn pm2 restart in a detached process so this process can be killed
-    // without interrupting the restart command mid-flight.
-    const { spawn } = await import("node:child_process");
-    const child = spawn("pm2", ["restart", "seam-acp"], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    // Exit the process so the supervisor relaunches us with the new code. Under
+    // Task Scheduler the run-bot.ps1 loop restarts on exit; a graceful exit hook
+    // (SIGTERM-equivalent shutdown) lets Discord/SQLite flush first. Falls back to
+    // a plain exit if no hook is wired.
+    this.logger.info("restart: exiting for supervisor to relaunch");
+    if (this.restartHook) {
+      await this.restartHook();
+    } else {
+      process.exit(0);
+    }
+  }
+
+  /** Wire the graceful-shutdown routine invoked when a restart sentinel fires
+   *  (set by index.ts to the same shutdown used for SIGTERM). */
+  setRestartHook(fn: () => void | Promise<void>): void {
+    this.restartHook = fn;
   }
 
   // --- message turn ---
