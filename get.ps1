@@ -91,7 +91,7 @@ param(
     elseif ($env:SEAM_ACP_DIR) { $env:SEAM_ACP_DIR }
     elseif ($Yes -or [Console]::IsInputRedirected) { $defaultDir }
     else {
-      $ans = Read-Host "Where should seam-acp be installed? [$defaultDir]"
+      $ans = Read-Host "Where should seam-acp be installed? (a full path, or an existing folder to create it in) [$defaultDir]"
       if ([string]::IsNullOrWhiteSpace($ans)) { $defaultDir } else { $ans }
     }
   $target = [Environment]::ExpandEnvironmentVariables($target)
@@ -109,6 +109,18 @@ param(
       'git@github.com:lettucebo/seam-acp',
       'ssh://git@github.com/lettucebo/seam-acp'
     )
+  }
+
+  # If the target is an EXISTING, non-empty folder that isn't already a seam-acp
+  # checkout, treat it as a PARENT and create seam-acp\ inside it - so entering
+  # e.g. C:\Source\Repos installs into C:\Source\Repos\seam-acp, matching the
+  # "pick a folder to put it in" intuition. A non-existing path or an empty folder
+  # is used as-is; an existing seam-acp checkout is reused.
+  if ((Test-Path -LiteralPath $target -PathType Container) -and
+      ((Get-ChildItem -Force -LiteralPath $target -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0) -and
+      -not (_isOurRepo $target)) {
+    $target = Join-Path $target 'seam-acp'
+    _say "OK installing into subfolder: $target" Green
   }
 
   # --- clone / reuse --------------------------------------------------------

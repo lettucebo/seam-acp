@@ -23,7 +23,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/lettucebo/seam-acp/main/
 irm https://raw.githubusercontent.com/lettucebo/seam-acp/main/get.ps1 | iex
 ```
 
-- **目標資料夾**：預設 `~/seam-acp`（Windows：`%USERPROFILE%\seam-acp`），會互動詢問可 Enter 沿用；或用環境變數 `SEAM_ACP_DIR` 指定、`SEAM_ACP_REF` 選分支/tag（預設 `main`）。
+- **目標資料夾**：預設 `~/seam-acp`（Windows：`%USERPROFILE%\seam-acp`），會互動詢問可 Enter 沿用。你可以輸入**完整路徑**（含資料夾名，如 `C:\Source\Repos\seam-acp`），或輸入一個**已存在的資料夾**（如 `C:\Source\Repos`）——後者會自動在裡面建立 `seam-acp\` 子資料夾。也可用環境變數 `SEAM_ACP_DIR` 指定、`SEAM_ACP_REF` 選分支/tag（預設 `main`）。
 - **傳旗標**：bash `bash -c "$(curl -fsSL .../get.sh)" _ --yes`（`_` 佔位 `$0`，旗標才會落在 `$@`）；PowerShell `& ([scriptblock]::Create((irm .../get.ps1))) -Yes`。
 - **既有資料夾**：若目標已是同一個 seam-acp checkout → 直接沿用（不自動 `git pull`，要更新請自己 `git -C <dir> pull`）；若非空且非本 repo → 中止並請你換 `SEAM_ACP_DIR`。
 - **安全**：全程 https、來源是本 repo。想先看內容再跑：`curl -fsSL .../get.sh | less`（PowerShell：`irm .../get.ps1`）檢視後再執行。注意一行指令每次都抓 `main`（可變），`SEAM_ACP_REF` 是「版本選擇」（分支/tag，仍可變）非不可竄改的安全 pinning；要真正固定版本請先把腳本下載下來檢視、再執行「同一份」檔案。若 `curl` 失敗（如網路問題），命令替換形式會變成空指令、bash 不執行任何東西（安全的 no-op，並由 `curl -f` 印出錯誤）。

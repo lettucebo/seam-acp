@@ -141,12 +141,22 @@ TARGET=""
 if [ -n "${SEAM_ACP_DIR:-}" ]; then
   TARGET="$(expand_tilde "$SEAM_ACP_DIR")"
 else
-  prompt TARGET "Where should seam-acp be installed?" "$HOME/seam-acp"
+  prompt TARGET "Where should seam-acp be installed? (a full path, or an existing folder to create it in)" "$HOME/seam-acp"
   TARGET="$(expand_tilde "$TARGET")"
 fi
 [ -n "$TARGET" ] || die "no target directory given"
 
 ensure_git
+
+# If the target is an EXISTING, non-empty folder that isn't already a seam-acp
+# checkout, treat it as a PARENT and create seam-acp/ inside it — so entering
+# e.g. /Users/you/Projects installs into /Users/you/Projects/seam-acp, matching
+# the "pick a folder to put it in" intuition. A non-existing path or an empty
+# folder is used as-is; an existing seam-acp checkout is reused.
+if [ -d "$TARGET" ] && [ -n "$(ls -A "$TARGET" 2>/dev/null)" ] && ! is_our_repo "$TARGET"; then
+  TARGET="$TARGET/seam-acp"
+  ok "installing into subfolder: $TARGET"
+fi
 
 # --- clone / reuse ----------------------------------------------------------
 clone_repo() {
