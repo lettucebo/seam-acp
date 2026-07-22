@@ -71,20 +71,39 @@ To use the **Google Antigravity (agy)** profile, install the Antigravity CLI bin
 
 The guided installer checks/installs prerequisites (Node ≥ 22, git, gh, the
 Copilot CLI), collects your config into `.env`, builds, and can set up 24/7
-residency. Run it from inside the cloned repo:
+residency.
+
+**One line — no manual clone needed** (it clones for you, then installs):
+
+```sh
+# macOS / Linux — command-substitution form keeps prompts interactive
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/lettucebo/seam-acp/main/get.sh)"
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/lettucebo/seam-acp/main/get.ps1 | iex
+```
+
+It asks where to install (default `~/seam-acp`), clones, then runs the installer.
+Override the location with `SEAM_ACP_DIR` and the branch/tag with `SEAM_ACP_REF`.
+
+<details><summary>Already cloned? Run the installer directly</summary>
 
 ```sh
 # macOS / Linux
 ./install.sh
-
 # Windows (from a normal, non-admin PowerShell)
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
+</details>
 
 Useful flags (both installers): `--yes`/`-Yes` (non-interactive, keep
 existing/defaults), `--residency`/`-Residency` or `--no-residency`/`-NoResidency`,
-`--dry-run`/`-DryRun`, `--skip-auth`/`-SkipAuth`. See [INSTALL.md](INSTALL.md) for
-the full walkthrough, residency details, and uninstall.
+`--dry-run`/`-DryRun`, `--skip-auth`/`-SkipAuth`. To pass flags through the
+one-liner: bash `bash -c "$(curl -fsSL .../get.sh)" _ --yes` (the `_` fills `$0`);
+PowerShell `& ([scriptblock]::Create((irm .../get.ps1))) -Yes`. See
+[INSTALL.md](INSTALL.md) for the full walkthrough, residency details, and uninstall.
 
 ## Run (local dev)
 

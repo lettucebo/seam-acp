@@ -4,12 +4,34 @@
 `npm ci` 建置 → （可選）設定 24/7 常駐。所有平台共用同一份設定引擎
 （`scripts/setup.mjs`），行為一致。
 
-> 先決條件：請先把這個 repo `clone`（或下載 ZIP 解壓）到本機，然後在 **repo 根目錄**
-> 執行安裝器。安裝器不會自我 clone。
+> 先決條件：**推薦用下面的一行網路安裝**（會自動 clone，不需手動先 clone）。
+> 若你偏好手動，也可先 clone 再在 **repo 根目錄**執行 `install.sh` / `install.ps1`。
 
 ---
 
-## 快速開始
+## 一行網路安裝（推薦，免手動 clone）
+
+複製一行即可；它會問你要裝到哪、自動 clone、再執行安裝器。
+
+**macOS / Linux**（用命令替換形式，保留互動輸入；**別用** `curl | bash` 管道，會無法輸入 token）
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/lettucebo/seam-acp/main/get.sh)"
+```
+
+**Windows（PowerShell）**
+```powershell
+irm https://raw.githubusercontent.com/lettucebo/seam-acp/main/get.ps1 | iex
+```
+
+- **目標資料夾**：預設 `~/seam-acp`（Windows：`%USERPROFILE%\seam-acp`），會互動詢問可 Enter 沿用；或用環境變數 `SEAM_ACP_DIR` 指定、`SEAM_ACP_REF` 選分支/tag（預設 `main`）。
+- **傳旗標**：bash `bash -c "$(curl -fsSL .../get.sh)" _ --yes`（`_` 佔位 `$0`，旗標才會落在 `$@`）；PowerShell `& ([scriptblock]::Create((irm .../get.ps1))) -Yes`。
+- **既有資料夾**：若目標已是同一個 seam-acp checkout → 直接沿用（不自動 `git pull`，要更新請自己 `git -C <dir> pull`）；若非空且非本 repo → 中止並請你換 `SEAM_ACP_DIR`。
+- **安全**：全程 https、來源是本 repo。想先看內容再跑：`curl -fsSL .../get.sh | less`（PowerShell：`irm .../get.ps1`）檢視後再執行。
+- **Git 尚未安裝也沒關係**：bootstrap 會先幫你裝 git（Windows 需 winget/choco；mac 需 Homebrew）再 clone。
+
+---
+
+## （替代）手動 clone 再安裝
 
 **macOS / Linux**
 ```sh
@@ -25,8 +47,8 @@ cd seam-acp
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-> Windows 若連 git 都還沒有：先用瀏覽器下載 repo ZIP 解壓，或先
-> `winget install Git.Git` 再 clone。安裝器會補齊其餘前置需求。
+> Windows 若連 git 都還沒有：用上面的一行網路安裝（會自動裝 git），或先
+> `winget install Git.Git` 再 clone。
 
 ---
 
