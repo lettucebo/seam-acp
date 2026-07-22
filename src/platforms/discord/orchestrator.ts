@@ -1590,7 +1590,7 @@ export class Orchestrator {
     const label = new Map(EFFORT_CHOICES.map((c) => [c.value, c.label]));
     const all = [
       ...levels.map((l) => ({ value: l, name: label.has(l) ? `${label.get(l)} (${l})` : l })),
-      { value: "default", name: "Default (model's own)" },
+      { value: "default", name: "Clear saved override (new threads use model default)" },
     ];
     const q = query.trim().toLowerCase();
     const filtered = q
@@ -3523,12 +3523,16 @@ export class Orchestrator {
     // "default" is always allowed — it clears any saved override regardless of
     // whether the current model exposes effort levels (so a stale override set on
     // a different model can always be cleared). Handle it before the capability
-    // gate below.
+    // gate below. NOTE: Copilot persists a session's effort server-side, and
+    // loadSession restores it, so clearing the override only affects NEW threads
+    // — the current conversation keeps its present level (verified on
+    // copilot 1.0.74-1). Word the reply honestly rather than claiming a reset.
     if (level === "default") {
       await this.applyEffortChange(record, "default");
       await i.reply({
         content:
-          "Reasoning effort reset to the model's own default (saved override cleared) — applies on your next message.",
+          "Cleared the saved reasoning-effort override — new threads will use the model's own default. " +
+          "(Copilot keeps this conversation's current effort until you pick a specific level.)",
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -3566,7 +3570,11 @@ export class Orchestrator {
       ...supported.map(
         (lvl) => effortMeta.get(lvl) ?? { value: lvl, label: lvl, description: "" }
       ),
-      { value: "default", label: "Default", description: "Use the model's own default (unset)" },
+      {
+        value: "default",
+        label: "Clear override",
+        description: "Clear the saved override — new threads use the model's default",
+      },
     ];
     const supportedList = supported.map((l) => `\`${l}\``).join(", ");
 
