@@ -8,6 +8,20 @@ export interface ModelInfo {
   modelId: string;
   name?: string;
   contextLimit?: number;
+  /** Copilot credit multiplier, e.g. "15x" (copilotUsage). */
+  usageMultiplier?: string;
+  /** Copilot price band, e.g. "high" (copilotPriceCategory). */
+  priceCategory?: string;
+  /** Copilot enablement, e.g. "enabled"/"disabled" (copilotEnablement). */
+  enablement?: string;
+  /** The model's own one-line description, when the agent advertises it. */
+  description?: string;
+}
+
+/** Whether the model is usable. Copilot marks entitlement via
+ *  `_meta.copilotEnablement`; a missing value means "no signal ⇒ assume usable". */
+export function isModelEnabled(m: ModelInfo): boolean {
+  return m.enablement === undefined || m.enablement === "enabled";
 }
 
 /** Format a token count as a compact window size (200000 → "200K", 1_000_000 → "1M"). */
@@ -18,12 +32,29 @@ export function formatContextWindow(n: number): string {
   return String(Math.round(n));
 }
 
-/** Human label for a model choice: name (or id), with the context window
- *  appended when known (e.g. "Opus 4.8 (claude-opus-4-8) • 1M ctx"). */
+/** Human label for a model choice: name (or id), with the context window and/or
+ *  Copilot usage multiplier appended when known (e.g.
+ *  "Opus 4.8 (claude-opus-4-8) • 1M ctx" or "Claude Opus 4.8 (id) • 15x"). */
 export function modelChoiceLabel(m: ModelInfo): string {
   const base = m.name && m.name !== m.modelId ? `${m.name} (${m.modelId})` : m.modelId;
-  const ctx = m.contextLimit ? formatContextWindow(m.contextLimit) : "";
-  return ctx ? `${base} • ${ctx} ctx` : base;
+  const tags: string[] = [];
+  if (m.contextLimit) tags.push(`${formatContextWindow(m.contextLimit)} ctx`);
+  if (m.usageMultiplier) tags.push(m.usageMultiplier);
+  return tags.length ? `${base} • ${tags.join(" • ")}` : base;
+}
+
+/** Select-option description line for the model picker. Composes the Copilot
+ *  metadata (credit multiplier · price band · context · non-enabled marker); if
+ *  the model carries no metadata, falls back to its own description. Returns
+ *  undefined when there is nothing informative to show. */
+export function modelChoiceDescription(m: ModelInfo): string | undefined {
+  const parts: string[] = [];
+  if (m.usageMultiplier) parts.push(`${m.usageMultiplier} credits`);
+  if (m.priceCategory) parts.push(m.priceCategory);
+  if (m.contextLimit) parts.push(`${formatContextWindow(m.contextLimit)} ctx`);
+  if (m.enablement && m.enablement !== "enabled") parts.push(`(${m.enablement})`);
+  if (parts.length > 0) return parts.join(" · ");
+  return m.description && m.description !== m.name ? m.description : undefined;
 }
 
 /**

@@ -170,6 +170,10 @@ export class DiscordAdapter implements ChatAdapter {
       panel?: import("../../core/types.js").StructuredPanel;
       choices: ReadonlyArray<{ value: string; label: string; description?: string }>;
       timeoutMs?: number;
+      /** Force the string-select rendering even when the choice count would fit
+       *  in a button row. Use when the choices carry `description`s worth
+       *  showing (buttons can't render descriptions). */
+      forceSelect?: boolean;
       authorizedUserIds?: ReadonlySet<string>;
       successPanel?: (picked: { value: string; label: string }, username: string) => import("../../core/types.js").StructuredPanel;
     }
@@ -185,10 +189,11 @@ export class DiscordAdapter implements ChatAdapter {
 
     // Discord allows 5 buttons per row × 5 rows = 25 buttons total.
     // We cap at 15 (3 rows) so the picker stays visually manageable;
-    // anything bigger drops to a single dropdown.
+    // anything bigger drops to a single dropdown. `forceSelect` also drops to
+    // the dropdown so option descriptions (e.g. model usage/price) stay visible.
     const BUTTON_LIMIT = 15;
     const BUTTONS_PER_ROW = 5;
-    const useButtons = choices.length <= BUTTON_LIMIT;
+    const useButtons = !opts.forceSelect && choices.length <= BUTTON_LIMIT;
     const customId = `seam-pick:${Date.now()}`;
 
     const components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];

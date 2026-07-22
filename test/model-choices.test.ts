@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   computeModelChoices,
   modelChoiceLabel,
+  modelChoiceDescription,
+  isModelEnabled,
   formatContextWindow,
   type ModelInfo,
 } from "../src/core/model-choices.js";
@@ -30,6 +32,53 @@ describe("modelChoiceLabel", () => {
     // no context (e.g. Copilot) → no ' • undefined ctx'
     expect(modelChoiceLabel({ modelId: "gpt-5.4", name: "GPT-5.4" })).toBe("GPT-5.4 (gpt-5.4)");
     expect(modelChoiceLabel({ modelId: "auto" })).toBe("auto");
+  });
+
+  it("appends the Copilot usage multiplier when present (no context window)", () => {
+    expect(
+      modelChoiceLabel({ modelId: "claude-opus-4.8", name: "Claude Opus 4.8", usageMultiplier: "15x" })
+    ).toBe("Claude Opus 4.8 (claude-opus-4.8) • 15x");
+  });
+});
+
+describe("modelChoiceDescription", () => {
+  it("composes usage / price / context into a select-option description", () => {
+    expect(
+      modelChoiceDescription({
+        modelId: "claude-opus-4.8",
+        name: "Claude Opus 4.8",
+        usageMultiplier: "15x",
+        priceCategory: "high",
+      })
+    ).toBe("15x credits · high");
+  });
+  it("includes the context window when the profile declares one", () => {
+    expect(
+      modelChoiceDescription({ modelId: "m", name: "M", usageMultiplier: "1x", contextLimit: 200_000 })
+    ).toBe("1x credits · 200K ctx");
+  });
+  it("marks non-enabled models", () => {
+    expect(
+      modelChoiceDescription({ modelId: "m", name: "M", usageMultiplier: "1x", enablement: "disabled" })
+    ).toBe("1x credits · (disabled)");
+  });
+  it("falls back to the model's own description when it has no metadata", () => {
+    expect(
+      modelChoiceDescription({ modelId: "auto", name: "Auto", description: "Let Copilot pick the best model" })
+    ).toBe("Let Copilot pick the best model");
+  });
+  it("returns undefined when there is nothing to show", () => {
+    expect(modelChoiceDescription({ modelId: "m", name: "M" })).toBeUndefined();
+    // description identical to the name adds no info
+    expect(modelChoiceDescription({ modelId: "m", name: "M", description: "M" })).toBeUndefined();
+  });
+});
+
+describe("isModelEnabled", () => {
+  it("treats missing enablement as enabled, and only 'enabled' as enabled", () => {
+    expect(isModelEnabled({ modelId: "m" })).toBe(true);
+    expect(isModelEnabled({ modelId: "m", enablement: "enabled" })).toBe(true);
+    expect(isModelEnabled({ modelId: "m", enablement: "disabled" })).toBe(false);
   });
 });
 

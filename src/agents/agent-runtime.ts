@@ -21,6 +21,12 @@ import {
 } from "./attachments.js";
 import { blockToFile } from "./agent-content.js";
 import { SerialQueue } from "../core/serial-queue.js";
+import {
+  parseEffortOption,
+  parseModelOptions,
+  resolveEffortLevels,
+  type EnrichedModel,
+} from "../core/config-options.js";
 
 /** Events surfaced from the ACP `session/update` stream. */
 export type AgentEvent =
@@ -86,12 +92,18 @@ export interface NewSessionOptions {
 export interface SessionInfo {
   sessionId: string;
   /** Available models (if the agent advertised them in `session/new`). */
-  availableModels: ReadonlyArray<{ modelId: string; name: string }>;
+  availableModels: ReadonlyArray<AvailableModel>;
   /** Current model id, if known. */
   currentModelId?: string;
   /** Available modes. */
   availableModes: ReadonlyArray<{ id: string; name: string }>;
   currentModeId?: string;
+  /** Reasoning-effort levels the *current model* accepts. Read live from the
+   *  ACP config options (per-model — some models expose none); falls back to the
+   *  profile's declared levels before the first snapshot / for `_meta` agents. */
+  availableEffortLevels?: ReadonlyArray<string>;
+  /** Current reasoning effort, when the agent surfaces it as a config option. */
+  currentEffort?: string;
 }
 
 export interface PromptOutcome {
@@ -101,29 +113,14 @@ export interface PromptOutcome {
   rejectedAttachments?: RejectedAttachment[];
 }
 
-interface AvailableModel {
-  modelId: string;
-  name: string;
+export interface AvailableModel extends EnrichedModel {
+  /** Context window in tokens, when the profile's staticModels declare it. */
+  contextLimit?: number;
 }
 
 interface AvailableMode {
   id: string;
   name: string;
-}
-
-/** ACP select options may be a flat list of options or a list of groups; this
- *  flattens either shape to the leaf options. */
-function flattenConfigSelectOptions(
-  options: import("@agentclientprotocol/sdk").SessionConfigSelectOptions
-): ReadonlyArray<
-  import("@agentclientprotocol/sdk").SessionConfigSelectOption
-> {
-  return (
-    options as ReadonlyArray<
-      | import("@agentclientprotocol/sdk").SessionConfigSelectOption
-      | import("@agentclientprotocol/sdk").SessionConfigSelectGroup
-    >
-  ).flatMap((o) => ("options" in o ? o.options : [o]));
 }
 
 /**
@@ -416,12 +413,15 @@ export class AgentRuntime {
     });
     this.sessionCwd = opts.cwd;
     this.sessionId = opts.sessionId;
+    const loadEffort = this.toEffort(result.configOptions);
     this.sessionInfo = {
       sessionId: opts.sessionId,
       availableModels: this.toAvailableModels(result.configOptions),
       currentModelId: this.toCurrentModelId(result.configOptions),
       availableModes: this.toAvailableModes(result.modes),
       currentModeId: this.toCurrentModeId(result.modes),
+      availableEffortLevels: loadEffort.levels,
+      ...(loadEffort.current ? { currentEffort: loadEffort.current } : {}),
     };
 
     // Re-apply model preference on resume — Claude Code sessions don't persist
@@ -548,19 +548,62 @@ export class AgentRuntime {
   ): Promise<void> {
     const conn = this.requireConnection();
     const sid = this.requireSessionId();
-    if (typeof value === "boolean") {
-      await conn.setSessionConfigOption({
-        sessionId: sid,
-        configId,
-        type: "boolean",
-        value,
-      });
-    } else {
-      await conn.setSessionConfigOption({
-        sessionId: sid,
-        configId,
-        value,
-      });
+    const resp =
+      typeof value === "boolean"
+        ? await conn.setSessionConfigOption({
+            sessionId: sid,
+            configId,
+            type: "boolean",
+            value,
+          })
+        : await conn.setSessionConfigOption({
+            sessionId: sid,
+            configId,
+            value,
+          });
+    // The response carries the full refreshed configOptions — sync our cached
+    // model/effort view so `currentEffort` reflects what the server accepted
+    // (and per-model effort levels update when the model itself changed).
+    const opts = (resp as unknown as { configOptions?: unknown })?.configOptions;
+    if (opts) await this.refreshFromConfigOptions(opts);
+  }
+
+  /** Merge a fresh configOptions snapshot (from a `set_config_option` response
+   *  or a `config_option_update` notification) into the cached SessionInfo:
+   *  current model, advertised models, and the per-model effort levels/current.
+   *  Emits `model-changed` only when the current model actually changed, so it
+   *  is safe to call from both the response and the notification without
+   *  double-emitting. */
+  private async refreshFromConfigOptions(opts: unknown): Promise<void> {
+    if (!this.sessionInfo || !opts) return;
+    const currentModel = extractCurrentModel(opts);
+    // Resolve effort with the same three-state logic as the initial snapshot so a
+    // live model switch to a no-effort model (e.g. Sonnet→Haiku) CLEARS the stale
+    // levels/current instead of retaining the previous model's.
+    const effort = resolveEffortLevels({
+      parsed: parseEffortOption(opts),
+      mechanism: this.profile.effort?.mechanism,
+      hasSnapshot: true,
+      fallbackLevels: this.profile.effort?.levels ?? [],
+    });
+    // Static-model profiles (Claude, pinned COPILOT_MODELS) own their picker
+    // labels — don't clobber them with the ACP list.
+    const dynamicModels =
+      this.profile.staticModels && this.profile.staticModels.length > 0
+        ? undefined
+        : parseModelOptions(opts);
+    const prevModel = this.sessionInfo.currentModelId;
+    this.sessionInfo = {
+      ...this.sessionInfo,
+      ...(currentModel ? { currentModelId: currentModel } : {}),
+      ...(dynamicModels && dynamicModels.length > 0
+        ? { availableModels: dynamicModels }
+        : {}),
+      availableEffortLevels: effort.levels,
+      currentEffort: effort.current, // undefined clears a stale value
+    };
+    if (currentModel && currentModel !== prevModel) {
+      await this.emit({ kind: "model-changed", modelId: currentModel });
     }
   }
 
@@ -571,9 +614,31 @@ export class AgentRuntime {
   private async applyConfigOptionEffort(effort?: string): Promise<void> {
     const eff = this.profile.effort;
     if (!eff || eff.mechanism !== "configOption" || !eff.configId) return;
-    if (!effort || effort === "default" || !eff.levels.includes(effort)) return;
+    if (!effort || effort === "default") return;
+    // Validate against the *live* per-model levels when a snapshot exists.
+    // Three-state: `[]` = the current model exposes no effort (skip cleanly);
+    // non-empty = the model's real levels (a superset like xhigh/max the profile
+    // list omits); `undefined` = no snapshot yet ⇒ profile cold-start fallback.
+    const live = this.sessionInfo?.availableEffortLevels;
+    const allowed = live !== undefined ? live : eff.levels;
+    if (!allowed.includes(effort)) {
+      this.logger.warn(
+        { effort, allowed },
+        "requested reasoning effort not offered by the current model; skipping"
+      );
+      return;
+    }
     try {
       await this.setConfigOption(eff.configId, effort);
+      // setConfigOption refreshed currentEffort from the server response —
+      // warn (don't throw) if the server quietly landed on a different level.
+      const applied = this.sessionInfo?.currentEffort;
+      if (applied && applied !== effort) {
+        this.logger.warn(
+          { requested: effort, applied },
+          "reasoning effort mismatch after set_config_option"
+        );
+      }
     } catch (err) {
       this.logger.warn(
         { err, effort, configId: eff.configId },
@@ -811,17 +876,11 @@ export class AgentRuntime {
         return;
       }
       case "config_option_update": {
-        // Track current model if present in the new options.
+        // Refresh current model, advertised models, and per-model effort
+        // levels/current from the new snapshot (emits model-changed on change).
         const opts = (update as unknown as { configOptions?: unknown })
           .configOptions;
-        const currentModel = extractCurrentModel(opts);
-        if (currentModel && this.sessionInfo) {
-          this.sessionInfo = {
-            ...this.sessionInfo,
-            currentModelId: currentModel,
-          };
-          await this.emit({ kind: "model-changed", modelId: currentModel });
-        }
+        await this.refreshFromConfigOptions(opts);
         await this.emit({ kind: "config-options", options: opts });
         return;
       }
@@ -925,12 +984,15 @@ export class AgentRuntime {
   private buildSessionInfo(
     result: import("@agentclientprotocol/sdk").NewSessionResponse
   ): SessionInfo {
+    const effort = this.toEffort(result.configOptions);
     return {
       sessionId: result.sessionId,
       availableModels: this.toAvailableModels(result.configOptions),
       currentModelId: this.toCurrentModelId(result.configOptions),
       availableModes: this.toAvailableModes(result.modes),
       currentModeId: this.toCurrentModeId(result.modes),
+      availableEffortLevels: effort.levels,
+      ...(effort.current ? { currentEffort: effort.current } : {}),
     };
   }
 
@@ -959,12 +1021,28 @@ export class AgentRuntime {
     if (this.profile.staticModels && this.profile.staticModels.length > 0) {
       return this.profile.staticModels;
     }
-    const opt = this.findModelOption(configOptions);
-    if (!opt || opt.type !== "select") return [];
-    return flattenConfigSelectOptions(opt.options).map((o) => ({
-      modelId: o.value,
-      name: o.name,
-    }));
+    // Dynamic path (no pinned COPILOT_MODELS): surface the ACP-advertised models
+    // enriched with description + Copilot _meta (usage multiplier/price/enablement).
+    return parseModelOptions(configOptions);
+  }
+
+  /** Reasoning-effort levels + current value for the *current model*. Reads the
+   *  live ACP `reasoning_effort` option, but distinguishes three states via
+   *  resolveEffortLevels: live levels / authoritative-empty (a configOption agent
+   *  whose model exposes none, e.g. Haiku) / profile fallback (Claude's `_meta`
+   *  mechanism, or cold-start before any snapshot). */
+  private toEffort(
+    configOptions:
+      | ReadonlyArray<import("@agentclientprotocol/sdk").SessionConfigOption>
+      | null
+      | undefined
+  ): { levels: ReadonlyArray<string>; current?: string } {
+    return resolveEffortLevels({
+      parsed: parseEffortOption(configOptions),
+      mechanism: this.profile.effort?.mechanism,
+      hasSnapshot: configOptions != null,
+      fallbackLevels: this.profile.effort?.levels ?? [],
+    });
   }
 
   private toCurrentModelId(

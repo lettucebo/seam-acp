@@ -129,6 +129,8 @@ export interface ChatAdapter {
       panel?: StructuredPanel;
       choices: ReadonlyArray<{ value: string; label: string; description?: string }>;
       timeoutMs?: number;
+      /** Force string-select rendering so option descriptions stay visible. */
+      forceSelect?: boolean;
       authorizedUserIds?: ReadonlySet<string>;
       successPanel?: (picked: { value: string; label: string }, username: string) => StructuredPanel;
     }

@@ -61,9 +61,16 @@ export function makeCopilotProfile(opts: {
     threadAbbr: opts.threadAbbr,
     configDir,
     // Copilot exposes reasoning effort as an ACP config option (verified via
-    // `copilot --acp`: configOptions[id=reasoning_effort], low|medium|high).
-    // Applied post-session-create via setSessionConfigOption (AgentRuntime).
-    effort: { mechanism: "configOption", configId: "reasoning_effort", levels: ["low", "medium", "high"] },
+    // `copilot --acp`: configOptions[id=reasoning_effort]). The *actual* levels
+    // are per-model and read live from the session (AgentRuntime.toEffort); this
+    // list is only the cold-start fallback before the first snapshot exists.
+    // Full observed set: low|medium|high|xhigh|max (xhigh/max are Anthropic-only;
+    // some models — e.g. Haiku 4.5 — expose none).
+    effort: {
+      mechanism: "configOption",
+      configId: "reasoning_effort",
+      levels: ["low", "medium", "high", "xhigh", "max"],
+    },
     spawn(_modelOverride, _effortOverride, ctx) {
       // Build the injected MCP config per spawn so we can add a per-session
       // ask_user server (scoped by a session bearer token) on top of any

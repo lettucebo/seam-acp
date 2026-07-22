@@ -106,15 +106,9 @@ export function buildSeamCommand(
       .addStringOption((o) =>
         o
           .setName("level")
-          .setDescription("low | medium | high | xhigh | max — agent falls back if model doesn't support it")
+          .setDescription("Reasoning effort — type to see the current model's levels (or 'default' to reset)")
           .setRequired(false)
-          .addChoices(
-            { name: "low", value: "low" },
-            { name: "medium", value: "medium" },
-            { name: "high", value: "high" },
-            { name: "xhigh", value: "xhigh" },
-            { name: "max", value: "max" }
-          )
+          .setAutocomplete(true)
       )
   );
 

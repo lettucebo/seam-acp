@@ -73,7 +73,13 @@ import { SessionRouter } from "../../core/session-router.js";
 import { TurnStatus, renderStatusPanel } from "../../core/status-panel.js";
 import { isWithinRoot, resolveRepoPath, resolveRepoWithinRoot } from "../../core/path-utils.js";
 import { RepoProvisioner } from "../../core/repo-provisioner.js";
-import { computeModelChoices, type ModelInfo } from "../../core/model-choices.js";
+import {
+  computeModelChoices,
+  modelChoiceLabel,
+  modelChoiceDescription,
+  isModelEnabled,
+  type ModelInfo,
+} from "../../core/model-choices.js";
 import { ATTACH_FENCE_LANG, withHarnessPreamble } from "../../core/agent-conventions.js";
 import { isModelInlineableAttachment } from "../../agents/attachments.js";
 import { stageAttachment, sweepStagedAttachments } from "../../agents/attachment-staging.js";
@@ -1483,6 +1489,12 @@ export class Orchestrator {
         );
         return;
       }
+      if (!group && sub === "effort" && focused.name === "level") {
+        await interaction.respond(
+          this.effortAutocompleteChoices(interaction, String(focused.value))
+        );
+        return;
+      }
       await interaction.respond([]);
     } catch (err) {
       this.logger.warn({ err }, "repo autocomplete failed");
@@ -1557,6 +1569,34 @@ export class Orchestrator {
     }
 
     return computeModelChoices(source, current, query);
+  }
+
+  /** Autocomplete for `/… effort level`. Sources the *live* per-model levels
+   *  when a runtime exists for this thread (per-model — some models expose
+   *  none), else the agent profile's declared set; always appends `default`
+   *  (reset). Filters by the typed substring and caps at Discord's 25. */
+  private effortAutocompleteChoices(
+    interaction: AutocompleteInteraction,
+    query: string
+  ): { name: string; value: string }[] {
+    const channelId = interaction.channelId ?? undefined;
+    const record = channelId ? this.store.getByChannel(PLATFORM, channelId) : null;
+    const agentId = record?.agentId ?? this.config.DEFAULT_AGENT;
+    const profile = this.router.getProfile(agentId);
+    const live = record ? this.router.getLiveEffortLevels(record.id) : undefined;
+    // Three-state: [] means "live-and-unsupported" (respect it); undefined means
+    // "no runtime" (use the profile cold-start set).
+    const levels = (live !== undefined ? live : profile?.effort?.levels) ?? [];
+    const label = new Map(EFFORT_CHOICES.map((c) => [c.value, c.label]));
+    const all = [
+      ...levels.map((l) => ({ value: l, name: label.has(l) ? `${label.get(l)} (${l})` : l })),
+      { value: "default", name: "Default (model's own)" },
+    ];
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? all.filter((c) => c.value.toLowerCase().includes(q) || c.name.toLowerCase().includes(q))
+      : all;
+    return filtered.slice(0, 25);
   }
 
   private async probeCopilotContext(
@@ -3153,7 +3193,7 @@ export class Orchestrator {
         return;
       }
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      let models: ReadonlyArray<{ modelId: string; name?: string }> = [];
+      let models: ReadonlyArray<ModelInfo> = [];
       const profile = this.router.getProfile(record.agentId);
       if (profile?.staticModels && profile.staticModels.length > 0) {
         models = profile.staticModels;
@@ -3176,18 +3216,62 @@ export class Orchestrator {
         );
         return;
       }
+      // Order: current model first, then entitled ("enabled") models, then any
+      // the account can't use (Copilot flags entitlement via _meta). Discord
+      // caps the dropdown at 25 — surface the overflow rather than silently
+      // dropping it (the `id:` autocomplete can search the full catalog).
+      // Only entitled ("enabled") models are selectable — a disabled model would
+      // be rejected by the agent on apply. If the agent marks none enabled (no
+      // signal), fall back to the full list so the picker is never empty.
+      const usable = models.filter(isModelEnabled);
+      const pool = usable.length > 0 ? [...usable] : [...models];
+      const curIdx = pool.findIndex((m) => m.modelId === current);
+      if (curIdx > 0) pool.unshift(pool.splice(curIdx, 1)[0]!);
+      const overflow = pool.length > 25;
+      const choices = pool.slice(0, 25).map((m) => ({
+        value: m.modelId,
+        label: modelChoiceLabel(m).slice(0, 100),
+        description: modelChoiceDescription(m) ?? m.modelId,
+      }));
+      // Copilot's ACP advertises no per-model context window (it caps live
+      // sessions at ~264K regardless of a 1M account entitlement), so when no
+      // model carries a contextLimit, note that rather than imply a size. Gate
+      // to Copilot profiles so the Copilot-specific wording never shows for
+      // another agent that merely omits contextLimit.
+      const isCopilotAgent = record.agentId.startsWith("copilot");
+      const noContext = isCopilotAgent && pool.every((m) => !m.contextLimit);
       await i.editReply(`Current model: ${displayCurrent}. Posting picker…`);
       const picked = await this.adapter.sendChoicePicker(channel, {
         panel: {
           color: 0x5865f2,
           title: "🧠 Choose a model",
-          fields: [{ name: "Current", value: displayCurrent, inline: true }],
+          fields: [
+            { name: "Current", value: displayCurrent, inline: true },
+            ...(overflow
+              ? [
+                  {
+                    name: "Note",
+                    value: `Showing 25 of ${pool.length}. Type \`/${this.cmd} model id:\` to search the rest.`,
+                    inline: false,
+                  },
+                ]
+              : []),
+            ...(noContext
+              ? [
+                  {
+                    name: "Context",
+                    value:
+                      "Copilot doesn't advertise a per-model context size; live sessions cap at ~264K.",
+                    inline: false,
+                  },
+                ]
+              : []),
+          ],
         },
-        choices: models.slice(0, 25).map((m) => ({
-          value: m.modelId,
-          label: m.name ?? m.modelId,
-          description: m.modelId,
-        })),
+        choices,
+        // Force the dropdown so each option's usage/price/context description
+        // stays visible (button rows can't render descriptions).
+        forceSelect: true,
         authorizedUserIds: this.config.DISCORD_ALLOWED_USER_IDS,
         successPanel: (pickedChoice, username) => ({
           color: 0x57f287,
@@ -3436,21 +3520,54 @@ export class Orchestrator {
     const cfg = this.store.readConfig(record);
     const current = cfg.reasoningEffort ?? "default";
 
-    // Gate by the active agent's effort capability. Not every agent exposes a
-    // settable reasoning effort: agy bakes it into the model choice; others have
-    // none. Showing the picker for those would be a false "✅ changed".
+    // "default" is always allowed — it clears any saved override regardless of
+    // whether the current model exposes effort levels (so a stale override set on
+    // a different model can always be cleared). Handle it before the capability
+    // gate below.
+    if (level === "default") {
+      await this.applyEffortChange(record, "default");
+      await i.reply({
+        content:
+          "Reasoning effort reset to the model's own default (saved override cleared) — applies on your next message.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Gate by the active agent/model's effort capability. Not every agent exposes
+    // a settable reasoning effort: agy bakes it into the model choice; others
+    // have none; and some models (e.g. Copilot's Haiku) expose none while their
+    // siblings do. Showing the picker for those would be a false "✅ changed".
     const profile = this.router.getProfile(record.agentId);
     const eff = profile?.effort;
-    const supported = eff?.levels ?? [];
+    // Prefer the *live* per-model levels from a running session — they are the
+    // ground truth. Three-state: `undefined` = no runtime (use profile cold-start
+    // set); `[]` = live-and-unsupported for this model (respect it, don't fall
+    // back); non-empty = live levels.
+    const liveLevels = this.router.getLiveEffortLevels(record.id);
+    const supported = liveLevels !== undefined ? liveLevels : eff?.levels ?? [];
     if (supported.length === 0) {
       const msg =
         eff?.mechanism === "modelBaked"
           ? `Effort for \`${record.agentId}\` is part of the **model** choice — pick a high/med/low model variant with \`/${this.cmd} model\`.`
-          : `The active agent (\`${record.agentId}\`) doesn't support a reasoning-effort setting.`;
+          : `The active agent (\`${record.agentId}\`) doesn't support a reasoning-effort setting${
+              eff?.mechanism === "configOption" && liveLevels
+                ? " for the current model"
+                : ""
+            }.`;
       await i.reply({ content: msg, flags: MessageFlags.Ephemeral });
       return;
     }
-    const effortChoices = EFFORT_CHOICES.filter((c) => supported.includes(c.value));
+    // Build picker choices from the (possibly live) level list, enriching known
+    // levels with a friendly label/description and tolerating any new level the
+    // agent introduces. A trailing "default" resets to the model's own default.
+    const effortMeta = new Map(EFFORT_CHOICES.map((c) => [c.value, c]));
+    const effortChoices = [
+      ...supported.map(
+        (lvl) => effortMeta.get(lvl) ?? { value: lvl, label: lvl, description: "" }
+      ),
+      { value: "default", label: "Default", description: "Use the model's own default (unset)" },
+    ];
     const supportedList = supported.map((l) => `\`${l}\``).join(", ");
 
     // No argument → interactive picker (falling back to a text report when the
@@ -3490,12 +3607,13 @@ export class Orchestrator {
       return;
     }
 
-    // Explicit level: validate against what THIS agent supports. The slash
-    // command registers the full 5-level list statically, so an agent with a
-    // narrower range (e.g. Copilot: low/medium/high) must reject xhigh/max here.
-    if (!supported.includes(level)) {
+    // Explicit level: validate against what THIS agent/model supports. The slash
+    // option offers the full set statically, so a model with a narrower range
+    // (e.g. Copilot Haiku: none) must reject unsupported levels here. "default"
+    // is always allowed — it resets to the model's own default.
+    if (level !== "default" && !supported.includes(level)) {
       await i.reply({
-        content: `\`${level}\` isn't supported by \`${record.agentId}\` — choose one of: ${supportedList}.`,
+        content: `\`${level}\` isn't supported by \`${record.agentId}\` — choose one of: ${supportedList}, or \`default\`.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -3514,7 +3632,10 @@ export class Orchestrator {
     level: string
   ): Promise<void> {
     const cfg = this.store.readConfig(record);
-    cfg.reasoningEffort = level;
+    // "default" resets to the model's own default — clear the stored override so
+    // AgentRuntime.applyConfigOptionEffort leaves the level untouched.
+    if (level === "default") delete cfg.reasoningEffort;
+    else cfg.reasoningEffort = level;
     this.persistConfig(record, cfg);
     // Effort is applied when the session is (re)built, per the agent's
     // mechanism: Claude via `_meta.claudeCode.options.effort` (set_config_option

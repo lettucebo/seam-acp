@@ -11,6 +11,7 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
+import type { ModelInfo } from "./model-choices.js";
 
 export type AskUserFn = (
   record: SessionRecord,
@@ -43,10 +44,7 @@ export class SessionRouter {
   /** Last-seen advertised model catalog per agent id, cached in memory so the
    *  `/… model id` autocomplete has options even before a runtime is up for the
    *  current thread. Populated whenever a runtime advertises models. */
-  private readonly seenModels = new Map<
-    string,
-    ReadonlyArray<{ modelId: string; name?: string; contextLimit?: number }>
-  >();
+  private readonly seenModels = new Map<string, ReadonlyArray<ModelInfo>>();
   private readonly startFailureCooldownMs = 30_000;
 
   constructor(opts: {
@@ -97,17 +95,20 @@ export class SessionRouter {
 
   /** Models advertised by the live runtime for this session, if one exists
    *  (never starts a runtime — safe for the 3s autocomplete budget). */
-  getLiveModels(
-    sessionId: string
-  ): ReadonlyArray<{ modelId: string; name?: string; contextLimit?: number }> | undefined {
+  getLiveModels(sessionId: string): ReadonlyArray<ModelInfo> | undefined {
     return this.runtimes.get(sessionId)?.getSessionInfo()?.availableModels;
   }
 
   /** Last-seen advertised model catalog for an agent id (in-memory cache). */
-  getSeenModels(
-    agentId: string
-  ): ReadonlyArray<{ modelId: string; name?: string; contextLimit?: number }> | undefined {
+  getSeenModels(agentId: string): ReadonlyArray<ModelInfo> | undefined {
     return this.seenModels.get(agentId);
+  }
+
+  /** Reasoning-effort levels the *current model* accepts, from the live runtime
+   *  if one exists (per-model; some models expose none). Never starts a runtime,
+   *  so it is safe on the interaction hot path. */
+  getLiveEffortLevels(sessionId: string): ReadonlyArray<string> | undefined {
+    return this.runtimes.get(sessionId)?.getSessionInfo()?.availableEffortLevels;
   }
 
   /** Look up or create the SessionRecord for a given chat channel. */
