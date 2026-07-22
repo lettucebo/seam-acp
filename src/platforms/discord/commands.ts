@@ -106,7 +106,7 @@ export function buildSeamCommand(
       .addStringOption((o) =>
         o
           .setName("level")
-          .setDescription("Reasoning effort — type to see the current model's levels (or 'default' to reset)")
+          .setDescription("Reasoning effort — type to see the current model's levels (or 'default' to clear the saved override)")
           .setRequired(false)
           .setAutocomplete(true)
       )

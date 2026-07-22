@@ -3586,7 +3586,7 @@ export class Orchestrator {
         const body =
           cfg.reasoningEffort
             ? `Reasoning effort: \`${cfg.reasoningEffort}\`.`
-            : `Reasoning effort is **unset** — the agent uses its own default. Set with \`/${this.cmd} effort level:<${supported.join("|")}>\`.`;
+            : `Reasoning effort override is **unset** — new threads use the model's own default. Set with \`/${this.cmd} effort level:<${supported.join("|")}>\`.`;
         await i.reply({ content: body, flags: MessageFlags.Ephemeral });
         return;
       }
@@ -3600,15 +3600,26 @@ export class Orchestrator {
         },
         choices: effortChoices,
         authorizedUserIds: this.config.DISCORD_ALLOWED_USER_IDS,
-        successPanel: (pickedChoice, username) => ({
-          color: 0x57f287,
-          title: "✅ Effort changed",
-          fields: [
-            { name: "Previous", value: `\`${current}\``, inline: true },
-            { name: "New", value: `\`${pickedChoice.value}\``, inline: true },
-          ],
-          footer: `Changed by ${username} — applies on the next message`,
-        }),
+        successPanel: (pickedChoice, username) =>
+          pickedChoice.value === "default"
+            ? {
+                color: 0x57f287,
+                title: "🧹 Saved override cleared",
+                fields: [
+                  { name: "Was", value: `\`${current}\``, inline: true },
+                  { name: "Now", value: "model default (new threads)", inline: true },
+                ],
+                footer: `Cleared by ${username} — this conversation keeps its current effort`,
+              }
+            : {
+                color: 0x57f287,
+                title: "✅ Effort changed",
+                fields: [
+                  { name: "Previous", value: `\`${current}\``, inline: true },
+                  { name: "New", value: `\`${pickedChoice.value}\``, inline: true },
+                ],
+                footer: `Changed by ${username} — applies on the next message`,
+              },
       });
       if (!picked) return;
       await this.applyEffortChange(record, picked.value);
@@ -3640,16 +3651,24 @@ export class Orchestrator {
     level: string
   ): Promise<void> {
     const cfg = this.store.readConfig(record);
-    // "default" resets to the model's own default — clear the stored override so
-    // AgentRuntime.applyConfigOptionEffort leaves the level untouched.
-    if (level === "default") delete cfg.reasoningEffort;
-    else cfg.reasoningEffort = level;
+    if (level === "default") {
+      // "default" only clears the SAVED override so future (new) threads use the
+      // model's default. It must NOT rebuild the live session: Copilot persists
+      // the session's effort server-side and loadSession restores it, so a
+      // rebuild would (a) interrupt any active turn and (b) re-apply the same
+      // effort — the opposite of "leave this conversation as-is". Persist and
+      // stop.
+      delete cfg.reasoningEffort;
+      this.persistConfig(record, cfg);
+      return;
+    }
+    cfg.reasoningEffort = level;
     this.persistConfig(record, cfg);
-    // Effort is applied when the session is (re)built, per the agent's
-    // mechanism: Claude via `_meta.claudeCode.options.effort` (set_config_option
-    // for "effort" errors there); Copilot via the `reasoning_effort` config
-    // option (AgentRuntime.applyConfigOptionEffort). Invalidate so the next turn
-    // rebuilds with the new effort; preserve the ACP session id for context.
+    // A concrete level IS applied when the session is (re)built, per the agent's
+    // mechanism: Claude via `_meta.claudeCode.options.effort`; Copilot via the
+    // `reasoning_effort` config option (AgentRuntime.applyConfigOptionEffort).
+    // Invalidate so the next turn rebuilds with the new effort; preserve the ACP
+    // session id for context.
     if (this.router.hasRuntime(record.id)) {
       await this.router.invalidate(record.id, { clearAcpSession: false });
     }
