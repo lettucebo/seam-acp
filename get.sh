@@ -33,14 +33,27 @@ warn() { printf '%s\n' "${Y}!  $*${Z}"; }
 die()  { printf '%s\n' "${R}X  $*${Z}" >&2; exit 1; }
 
 # --- parse flags: --yes for our own prompts; everything is forwarded to install.sh
-YES=0
+usage() {
+  cat <<'EOF'
+seam-acp bootstrap (macOS + Linux)
+
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/lettucebo/seam-acp/main/get.sh)"
+
+With flags (note the `_` — it fills $0 so flags land in $@):
+  bash -c "$(curl -fsSL .../get.sh)" _ --yes --no-residency
+
+Env: SEAM_ACP_DIR (target dir, default ~/seam-acp), SEAM_ACP_REF (branch/tag, default main)
+
+Ensures git, clones the repo, then runs its install.sh (all flags are forwarded).
+EOF
+}
+
+YES=0; DRY=0
 for a in "$@"; do
   case "$a" in
     --yes|-y) YES=1 ;;
-    --help|-h)
-      sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
-      say "Usage: bash -c \"\$(curl -fsSL .../get.sh)\" _ [--yes] [install.sh flags]"
-      exit 0 ;;
+    --dry-run) DRY=1 ;;
+    --help|-h) usage; exit 0 ;;
   esac
 done
 
@@ -77,7 +90,12 @@ have_git() { command -v git >/dev/null 2>&1 && git --version >/dev/null 2>&1; }
 
 ensure_git() {
   have_git && { ok "git $(git --version | awk '{print $3}')"; return; }
+  if [ "$DRY" = 1 ]; then warn "dry-run: would install git"; return; fi
   step "Installing git"
+  if [ "$YES" != 1 ]; then
+    local c; prompt c "git is required and not installed. Install it now? (Y/n)" "Y"
+    [ "$(printf '%s' "$c" | tr '[:upper:]' '[:lower:]')" = "n" ] && die "git is required. Install it and re-run."
+  fi
   local os; os="$(uname -s)"
   if [ "$os" = "Darwin" ]; then
     if command -v brew >/dev/null 2>&1; then
@@ -103,6 +121,18 @@ ensure_git() {
   ok "git installed"
 }
 
+# Exact identity check: the checkout's origin must be THIS repo (not just any URL
+# containing "seam-acp", which would match a fork or a hostile lookalike).
+is_our_repo() { # dir
+  local url
+  url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
+  url="${url%.git}"; url="${url%/}"
+  case "$url" in
+    https://github.com/lettucebo/seam-acp|git@github.com:lettucebo/seam-acp|ssh://git@github.com/lettucebo/seam-acp) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- target directory -------------------------------------------------------
 # shellcheck disable=SC2088  # "~/"* is a case pattern (literal match), not an expansion
 expand_tilde() { case "$1" in "~") printf '%s' "$HOME";; "~/"*) printf '%s' "$HOME/${1#\~/}";; *) printf '%s' "$1";; esac; }
@@ -120,6 +150,11 @@ ensure_git
 
 # --- clone / reuse ----------------------------------------------------------
 clone_repo() {
+  if [ "$DRY" = 1 ]; then
+    warn "dry-run: would clone $REPO_URL ($REF) -> $TARGET (then run the installer)"
+    ok "bootstrap dry-run complete (no checkout present to preview the full install)"
+    exit 0
+  fi
   step "Cloning seam-acp ($REF) -> $TARGET"
   git clone --branch "$REF" -- "$REPO_URL" "$TARGET" \
     || die "git clone failed (ref '$REF', target '$TARGET')"
@@ -127,8 +162,7 @@ clone_repo() {
 }
 
 if [ -e "$TARGET" ]; then
-  if [ -f "$TARGET/scripts/setup.mjs" ] && [ -d "$TARGET/.git" ] \
-     && git -C "$TARGET" remote get-url origin 2>/dev/null | grep -qi "seam-acp"; then
+  if [ -f "$TARGET/scripts/setup.mjs" ] && [ -d "$TARGET/.git" ] && is_our_repo "$TARGET"; then
     ok "using existing checkout at $TARGET"
     warn "not auto-updating; run 'git -C \"$TARGET\" pull' yourself to update."
   elif [ -d "$TARGET" ] && [ -z "$(ls -A "$TARGET" 2>/dev/null)" ]; then
@@ -145,4 +179,11 @@ fi
 # --- hand off to the repo installer (preserving original args) --------------
 step "Handing off to installer"
 chmod +x "$TARGET/install.sh" 2>/dev/null || true
-exec bash "$TARGET/install.sh" "$@"
+# Redirect the installer's stdin from the controlling terminal so the interactive
+# prompts (token, etc.) work even when THIS script was fed through a pipe
+# (curl | bash) rather than the command-substitution form.
+if [ -r /dev/tty ]; then
+  exec bash "$TARGET/install.sh" "$@" </dev/tty
+else
+  exec bash "$TARGET/install.sh" "$@"
+fi

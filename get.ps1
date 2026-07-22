@@ -13,8 +13,10 @@
   Ensures git, clones the repo, then hands off to the repo's install.ps1 in a
   CHILD process (isolated session + ExecutionPolicy Bypass).
 
-  NOTE: this runs inside YOUR PowerShell session (iex), so it never calls `exit`
-  (that would close your window) - it uses throw/return and restores state.
+  NOTE: this runs inside YOUR PowerShell session (iex). The whole body runs in an
+  isolated child scope (& { ... }) so it does NOT leak variables/functions into
+  your session, and it NEVER calls `exit` (that would close your window) - it uses
+  throw/return. Errors propagate as terminating errors, not by closing the shell.
 #>
 param(
   [switch]$Yes,
@@ -26,16 +28,20 @@ param(
   [string]$Ref
 )
 
-# Capture forwarding switches at SCRIPT scope (a helper function has its own).
-$SeamForward = @()
-foreach ($n in 'Yes','DryRun','Residency','NoResidency','SkipAuth') {
-  if ($PSBoundParameters.ContainsKey($n) -and $PSBoundParameters[$n]) { $SeamForward += "-$n" }
-}
+& {
+  param(
+    [switch]$Yes, [switch]$DryRun, [switch]$Residency, [switch]$NoResidency,
+    [switch]$SkipAuth, [string]$Dir, [string]$Ref
+  )
+  # $ErrorActionPreference is set in this child scope only - it does not leak.
+  $ErrorActionPreference = 'Stop'
 
-$SeamPrevEAP = $ErrorActionPreference
-$ErrorActionPreference = 'Stop'
-try {
-  $RepoUrl = 'https://github.com/lettucebo/seam-acp.git'
+  $forward = @()
+  foreach ($n in 'Yes', 'DryRun', 'Residency', 'NoResidency', 'SkipAuth') {
+    if ($PSBoundParameters.ContainsKey($n) -and $PSBoundParameters[$n]) { $forward += "-$n" }
+  }
+
+  $repoUrl = 'https://github.com/lettucebo/seam-acp.git'
   $ref = if ($Ref) { $Ref } elseif ($env:SEAM_ACP_REF) { $env:SEAM_ACP_REF } else { 'main' }
   $useColor = (-not $env:NO_COLOR) -and (-not [Console]::IsOutputRedirected)
   function _say($m, $c) { if ($useColor -and $c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } }
@@ -46,7 +52,6 @@ try {
   $gitOk = $false
   try { git --version *> $null; $gitOk = ($LASTEXITCODE -eq 0) } catch { $gitOk = $false }
   if (-not $gitOk) {
-    _say "> Installing git" Cyan
     if ($DryRun) {
       _say "!  dry-run: would install git via winget/choco" Yellow
     } else {
@@ -56,13 +61,17 @@ try {
       if (-not $pm) {
         throw "git is required but neither winget nor Chocolatey is available. Install Git for Windows from https://git-scm.com/download/win and re-run."
       }
+      if (-not ($Yes -or [Console]::IsInputRedirected)) {
+        $c = Read-Host "git is required and not installed. Install it now via $pm? (Y/n)"
+        if ($c -match '^(n|no)$') { throw "git is required. Install it and re-run." }
+      }
+      _say "> Installing git via $pm" Cyan
       if ($pm -eq 'winget') {
         winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements --silent
       } else {
         choco install git -y
       }
       if ($LASTEXITCODE -ne 0) { throw "git installation failed (exit $LASTEXITCODE). Install Git for Windows manually and re-run." }
-      # Refresh PATH from the registry (the installed git isn't on this session's PATH yet).
       $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
       $user = [Environment]::GetEnvironmentVariable('Path', 'User')
       $env:Path = (@($machine, $user) | Where-Object { $_ }) -join ';'
@@ -89,13 +98,24 @@ try {
   if ($target -like '~*') { $target = Join-Path $env:USERPROFILE ($target -replace '^~[\\/]?', '') }
   if ([string]::IsNullOrWhiteSpace($target)) { throw "no target directory given" }
 
+  # Exact identity check: origin must be THIS repo, not merely a URL containing
+  # "seam-acp" (which would match a fork or a hostile lookalike).
+  function _isOurRepo($dir) {
+    $o = (git -C $dir remote get-url origin 2>$null)
+    if (-not $o) { return $false }
+    $norm = ($o -replace '\.git/?$', '') -replace '/$', ''
+    return $norm -in @(
+      'https://github.com/lettucebo/seam-acp',
+      'git@github.com:lettucebo/seam-acp',
+      'ssh://git@github.com/lettucebo/seam-acp'
+    )
+  }
+
   # --- clone / reuse --------------------------------------------------------
   $doClone = $false
   if (Test-Path -LiteralPath $target) {
     $isRepo = (Test-Path -LiteralPath (Join-Path $target 'scripts\setup.mjs')) -and (Test-Path -LiteralPath (Join-Path $target '.git'))
-    $originOk = $false
-    if ($isRepo) { $o = (git -C $target remote get-url origin 2>$null); $originOk = ($o -match 'seam-acp') }
-    if ($isRepo -and $originOk) {
+    if ($isRepo -and (_isOurRepo $target)) {
       _say "OK using existing checkout at $target" Green
       _say "!  not auto-updating; run 'git -C `"$target`" pull' yourself to update." Yellow
     }
@@ -111,12 +131,12 @@ try {
 
   if ($doClone) {
     if ($DryRun) {
-      _say "!  dry-run: would clone $RepoUrl ($ref) -> $target (then run the installer)" Yellow
+      _say "!  dry-run: would clone $repoUrl ($ref) -> $target (then run the installer)" Yellow
       _say "OK bootstrap dry-run complete (no checkout present to preview the full install)" Green
       return
     }
     _say "> Cloning seam-acp ($ref) -> $target" Cyan
-    git clone --branch $ref -- $RepoUrl $target
+    git clone --branch $ref -- $repoUrl $target
     if ($LASTEXITCODE -ne 0) { throw "git clone failed (ref '$ref', target '$target')" }
     _say "OK cloned" Green
   }
@@ -130,11 +150,6 @@ try {
   $hostExe = (Get-Process -Id $PID -ErrorAction SilentlyContinue).Path
   if (-not $hostExe) { $hostExe = 'powershell.exe' }
   _say "> Handing off to installer" Cyan
-  & $hostExe -NoProfile -ExecutionPolicy Bypass -File $installer @SeamForward
-}
-catch {
-  Write-Host "X  $($_.Exception.Message)" -ForegroundColor Red
-}
-finally {
-  $ErrorActionPreference = $SeamPrevEAP
-}
+  & $hostExe -NoProfile -ExecutionPolicy Bypass -File $installer @forward
+  if ($LASTEXITCODE -ne 0) { throw "installer exited with code $LASTEXITCODE" }
+} @PSBoundParameters
