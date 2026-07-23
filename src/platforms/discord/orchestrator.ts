@@ -80,6 +80,7 @@ import {
   isModelEnabled,
   type ModelInfo,
 } from "../../core/model-choices.js";
+import { parseContextUsage } from "../../core/context-usage.js";
 import { ATTACH_FENCE_LANG, withHarnessPreamble } from "../../core/agent-conventions.js";
 import { isModelInlineableAttachment } from "../../agents/attachments.js";
 import { stageAttachment, sweepStagedAttachments } from "../../agents/attachment-staging.js";
@@ -1619,16 +1620,10 @@ export class Orchestrator {
           setTimeout(() => reject(new Error("/context probe timed out")), 5_000)
         ),
       ]);
-      const m = captured.match(
-        /(\d+(?:\.\d+)?)k\s*\/\s*(\d+(?:\.\d+)?)k\s*tokens/i
-      );
-      if (m) {
-        const used = Math.round(parseFloat(m[1]!) * 1000);
-        const size = Math.round(parseFloat(m[2]!) * 1000);
-        if (size > 0) {
-          await realHandler({ kind: "usage-update", used, size });
-          refresh();
-        }
+      const usage = parseContextUsage(captured);
+      if (usage) {
+        await realHandler({ kind: "usage-update", used: usage.used, size: usage.size });
+        refresh();
       }
     } catch (err) {
       this.logger.warn({ err }, "copilot /context probe failed");
@@ -3261,7 +3256,7 @@ export class Orchestrator {
                   {
                     name: "Context",
                     value:
-                      "Copilot doesn't advertise a per-model context size; live sessions cap at ~264K.",
+                      "As of CLI 1.0.74-1, Copilot ACP sessions report ~264K regardless of model. Long-context is requested, so supported/entitled models may lift automatically once GitHub enables it over ACP (may use more AI credits).",
                     inline: false,
                   },
                 ]

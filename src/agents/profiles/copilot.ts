@@ -14,6 +14,37 @@ const ASK_USER_SERVER = fileURLToPath(
 );
 
 /**
+ * Build the `copilot --acp` CLI argument list.
+ *
+ * We always pass `--context long_context`. On the current CLI (verified on
+ * 1.0.74-1) this is a harmless no-op: spawn + `session/new` succeed for every
+ * model (including ones with no large-context support, e.g. Haiku 4.5), and the
+ * effective window is still ~264K — GitHub has not yet wired the long-context
+ * tier through the ACP server (tracked upstream: github/copilot-cli #2785 "1M
+ * context" and #3481 "contextTier not applied / no CLI flag"). Requesting it
+ * unconditionally is forward-compatible: once the CLI honors the tier over ACP,
+ * sessions pick up the larger window with no code change here. (When it does
+ * activate, long-context requests may bill at a higher rate — that is the
+ * intended trade-off for the larger window.)
+ *
+ * NOTE: every Copilot spawn goes through here, INCLUDING short-lived utility
+ * runtimes (e.g. premium-compaction summarizers). Once the tier activates those
+ * would also request long-context; we accept that (the operator explicitly wants
+ * maximum context, and manual compaction fitting is capped separately by
+ * COMPACTION_MODEL_WINDOWS). Revisit with a utility-tier opt-out if credit cost
+ * becomes a concern.
+ */
+export function buildCopilotAcpArgs(
+  additionalMcpConfigJson?: string
+): string[] {
+  const args = ["--acp", "--context", "long_context"];
+  if (additionalMcpConfigJson) {
+    args.push("--additional-mcp-config", additionalMcpConfigJson);
+  }
+  return args;
+}
+
+/**
  * GitHub Copilot CLI as an ACP server (`copilot --acp`).
  *
  * Start the ACP server with `--allow-all` so the bot can run end-to-end
@@ -91,10 +122,7 @@ export function makeCopilotProfile(opts: {
         });
       }
       const additionalMcpJson = buildCopilotMcpConfigJson(servers);
-      const args = ["--acp"];
-      if (additionalMcpJson) {
-        args.push("--additional-mcp-config", additionalMcpJson);
-      }
+      const args = buildCopilotAcpArgs(additionalMcpJson);
       const env: NodeJS.ProcessEnv = { ...process.env };
       if (configDir) {
         // --config-dir is not a supported CLI flag. Instead, read the OAuth

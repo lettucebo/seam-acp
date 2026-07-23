@@ -382,9 +382,20 @@ function spawnAgent(copilotCmd, localCwd) {
   })();
   const cmdParts = copilotCmd.split(" ");
   const cmd = cmdParts[0];
+  // Forward-compat parity with the local spawn path (buildCopilotAcpArgs): request
+  // Copilot's long-context tier so remote Copilot sessions pick up the larger
+  // window automatically once GitHub enables it over ACP. Harmless no-op today
+  // (effective window still ~264K). Gated to copilot commands — it is a
+  // Copilot-only flag and would be an invalid arg for other ACP agents this
+  // bridge can spawn (e.g. claude-agent-acp). COPILOT_ARGS, when set, overrides
+  // the whole default (set it to "--acp --context long_context" for a custom
+  // copilot path, or to the appropriate flags for a non-copilot agent).
+  const isCopilotCmd = /copilot/i.test(path.basename(cmd));
   const extraArgs = process.env.COPILOT_ARGS !== undefined
     ? process.env.COPILOT_ARGS.split(" ").filter(Boolean)
-    : ["--acp"];
+    : isCopilotCmd
+      ? ["--acp", "--context", "long_context"]
+      : ["--acp"];
   const cmdArgs = [...cmdParts.slice(1), ...extraArgs];
   console.error(`[bridge] Spawning agent: ${cmd} ${cmdArgs.join(" ")} (GH_TOKEN: ${ghToken ? ghToken.slice(0, 8) + "..." : "MISSING"})`);
   return spawn(cmd, cmdArgs, {
